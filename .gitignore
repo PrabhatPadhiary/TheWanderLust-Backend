@@ -1,0 +1,19 @@
+# Build artifacts
+bin/
+obj/
+*.exe
+*.dll
+*.pdb
+
+# User-specific files
+.vscode/
+.idea/
+*.user
+*.suo
+*.csproj.user
+
+# Logs and secrets
+logs/
+*.log
+appsettings.Development.json
+secrets.json
