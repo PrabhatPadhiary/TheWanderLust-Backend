@@ -112,33 +112,7 @@ namespace TheWanderLustWebAPI.Controllers
             if (page <= 0 || pageSize <= 0)
                 return BadRequest("Page and PageSize must be greater than 0");
 
-            var query = _dbContext.Blogs.Select(blog => new
-            {
-                Id = blog.Id,
-                Email = blog.UserEmail,
-                Heading = blog.Heading,
-                Tagline = blog.Tagline,
-                Content = blog.Content,
-                ImageUrls = blog.ImageUrls,
-                Location = blog.Location,
-                LikeCount = _dbContext.BlogLikes.Count(bl => bl.BlogId == blog.Id),
-                Likes = _dbContext.BlogLikes.Where(bl => bl.BlogId == blog.Id).ToList(),
-                imagesMetaData = _dbContext.ImageMetadata.Where(im => im.BlogId == blog.Id).ToList(),
-                CreatedAt = blog.CreatedAt,
-                Username = _dbContext.Users
-                    .Where(u => u.Email == blog.UserEmail)
-                    .Select(u => u.Username)
-                    .FirstOrDefault(),
-                ProfilePicUrl = _dbContext.Users
-                    .Where(u => u.Email == blog.UserEmail)
-                    .Select(u => u.ProfilePictureUrl)
-                    .FirstOrDefault(),
-                LatestComment = _dbContext.BlogComments
-                    .Where(u => u.BlogId == blog.Id)
-                    .OrderByDescending(u => u.CreatedAt)
-                    .FirstOrDefault(),
-                CommentCount = _dbContext.BlogComments.Count(bc => bc.BlogId == blog.Id)
-            });
+            var query = GetBlogQuery();
 
             int totalBlogs = await query.CountAsync();
             int totalPages = (int)Math.Ceiling((double)totalBlogs / pageSize);
@@ -157,6 +131,17 @@ namespace TheWanderLustWebAPI.Controllers
                 totalPages,
                 totalBlogs
             });
+        }
+
+        [HttpGet("getBlogById")]
+        public async Task<ActionResult<object>> GetBlogById([FromQuery] int blogId)
+        {
+            var blog = await GetBlogQuery().FirstOrDefaultAsync(b => b.Id == blogId);
+
+            if (blog == null)
+                return NotFound("Blog not found");
+
+            return Ok(blog);
         }
 
         [HttpPost("toggleLike")]
@@ -277,6 +262,37 @@ namespace TheWanderLustWebAPI.Controllers
             }).ToList();
 
             return Ok(new { blogs = blogResults, users = userResults });
+        }
+
+        private IQueryable<BlogDTO> GetBlogQuery()
+        {
+            return _dbContext.Blogs.Select(blog => new BlogDTO
+            {
+                Id = blog.Id,
+                Email = blog.UserEmail,
+                Heading = blog.Heading,
+                Tagline = blog.Tagline,
+                Content = blog.Content,
+                ImageUrls = blog.ImageUrls,
+                Location = blog.Location,
+                LikeCount = _dbContext.BlogLikes.Count(bl => bl.BlogId == blog.Id),
+                Likes = _dbContext.BlogLikes.Where(bl => bl.BlogId == blog.Id).ToList(),
+                ImagesMetaData = _dbContext.ImageMetadata.Where(im => im.BlogId == blog.Id).ToList(),
+                CreatedAt = blog.CreatedAt,
+                Username = _dbContext.Users
+                    .Where(u => u.Email == blog.UserEmail)
+                    .Select(u => u.Username)
+                    .FirstOrDefault(),
+                ProfilePicUrl = _dbContext.Users
+                    .Where(u => u.Email == blog.UserEmail)
+                    .Select(u => u.ProfilePictureUrl)
+                    .FirstOrDefault(),
+                LatestComment = _dbContext.BlogComments
+                    .Where(u => u.BlogId == blog.Id)
+                    .OrderByDescending(u => u.CreatedAt)
+                    .FirstOrDefault(),
+                CommentCount = _dbContext.BlogComments.Count(bc => bc.BlogId == blog.Id)
+            });
         }
     }
 }
