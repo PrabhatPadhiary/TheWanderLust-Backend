@@ -3,6 +3,8 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using TheWanderLustWebAPI.Context;
+using TheWanderLustWebAPI.Settings;
+
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -18,6 +20,9 @@ builder.Services.AddDbContext<AppDbContext>(options =>
     );
 });
 builder.Services.AddScoped<CloudinaryService>();
+builder.Services.Configure<CloudinarySettings>(
+    builder.Configuration.GetSection("Cloudinary"));
+
 builder.Services.AddAuthentication(x => 
 {
     x.DefaultScheme = JwtBearerDefaults.AuthenticationScheme;

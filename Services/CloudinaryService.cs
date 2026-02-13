@@ -1,16 +1,20 @@
 using CloudinaryDotNet;
 using CloudinaryDotNet.Actions;
+using Microsoft.Extensions.Options;
+using TheWanderLustWebAPI.Settings;
 
 public class CloudinaryService
 {
     private readonly Cloudinary _cloudinary;
 
-    public CloudinaryService(IConfiguration config)
+    public CloudinaryService(IOptions<CloudinarySettings> options)
     {
+        var settings = options.Value;
+
         var account = new Account(
-            config["Cloudinary:CloudName"],
-            config["Cloudinary:ApiKey"],
-            config["Cloudinary:ApiSecret"]
+            settings.CloudName,
+            settings.ApiKey,
+            settings.ApiSecret
         );
 
         _cloudinary = new Cloudinary(account);
@@ -30,5 +34,5 @@ public class CloudinaryService
 
         return uploadResult.SecureUrl.ToString();
     }
-
 }
+
