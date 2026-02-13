@@ -21,10 +21,12 @@ namespace TheWanderLustWebAPI.Controllers
     {
         private readonly AppDbContext _authContext;
         private readonly IWebHostEnvironment _env;
-        public UserController(AppDbContext appDbContext, IWebHostEnvironment env)
+        private readonly CloudinaryService _cloudinaryService;
+        public UserController(AppDbContext appDbContext, IWebHostEnvironment env, CloudinaryService cloudinaryService)
         {
             _authContext = appDbContext;
             _env = env ?? throw new ArgumentNullException(nameof(env));
+            _cloudinaryService = cloudinaryService;
         }
 
         [HttpPost("login")]
@@ -47,7 +49,8 @@ namespace TheWanderLustWebAPI.Controllers
             user.RefreshTokenExpiryTime = DateTime.Now.AddDays(1);
             await _authContext.SaveChangesAsync();
 
-            return Ok(new LoginApiDto(){
+            return Ok(new LoginApiDto()
+            {
                 RefreshToken = newRefreshToken,
                 AccessToken = newAccessToken
             });
@@ -79,14 +82,10 @@ namespace TheWanderLustWebAPI.Controllers
 
             if (userDto.ProfilePicture != null)
             {
-                string filePath = Path.Combine(_env.WebRootPath, "user", userDto.ProfilePicture.FileName);
-                using (var stream = new FileStream(filePath, FileMode.Create))
-                {
-                    await userDto.ProfilePicture.CopyToAsync(stream);
-                }
-
-                profilePicUrl = $"/user/{userDto.ProfilePicture.FileName}";
+                profilePicUrl = await _cloudinaryService
+                    .UploadImageAsync(userDto.ProfilePicture, "profile_pictures");
             }
+
 
             var user = new User
             {
@@ -155,12 +154,14 @@ namespace TheWanderLustWebAPI.Controllers
             return sb.ToString();
         }
 
-        private string CreateRefreshToken(){
+        private string CreateRefreshToken()
+        {
             var tokenBytes = RandomNumberGenerator.GetBytes(64);
             var refreshToken = Convert.ToBase64String(tokenBytes);
 
             var tokenInUser = _authContext.Users.Any(x => x.RefreshToken == refreshToken);
-            if(tokenInUser){
+            if (tokenInUser)
+            {
                 return CreateRefreshToken();
             }
             return refreshToken;
@@ -169,7 +170,8 @@ namespace TheWanderLustWebAPI.Controllers
         private ClaimsPrincipal GetPrincipalFromExpiredToken(string token)
         {
             var key = Encoding.ASCII.GetBytes("veryverysecret.....");
-            var tokenValidationParameters = new TokenValidationParameters{
+            var tokenValidationParameters = new TokenValidationParameters
+            {
                 ValidateAudience = false,
                 ValidateIssuer = false,
                 ValidateIssuerSigningKey = true,
@@ -183,7 +185,7 @@ namespace TheWanderLustWebAPI.Controllers
             var principal = tokenHandler.ValidateToken(token, tokenValidationParameters, out securityToken);
             var jwtSecurityToken = securityToken as JwtSecurityToken;
 
-            if(jwtSecurityToken == null || !jwtSecurityToken.Header.Alg.Equals(SecurityAlgorithms.HmacSha256, StringComparison.InvariantCultureIgnoreCase))
+            if (jwtSecurityToken == null || !jwtSecurityToken.Header.Alg.Equals(SecurityAlgorithms.HmacSha256, StringComparison.InvariantCultureIgnoreCase))
                 throw new SecurityTokenException("This is invalid token");
             return principal;
         }
@@ -200,7 +202,7 @@ namespace TheWanderLustWebAPI.Controllers
                 new Claim(ClaimTypes.Name, user.Username)
             });
 
-            var credentials = new SigningCredentials(new SymmetricSecurityKey(key),SecurityAlgorithms.HmacSha256);
+            var credentials = new SigningCredentials(new SymmetricSecurityKey(key), SecurityAlgorithms.HmacSha256);
 
             var tokenDescriptor = new SecurityTokenDescriptor
             {
@@ -225,7 +227,7 @@ namespace TheWanderLustWebAPI.Controllers
             var username = principal.Identity.Name;
 
             var user = await _authContext.Users.FirstOrDefaultAsync(x => x.Username == username);
-            if(user is null || user.RefreshToken != refreshToken || user.RefreshTokenExpiryTime <= DateTime.Now)
+            if (user is null || user.RefreshToken != refreshToken || user.RefreshTokenExpiryTime <= DateTime.Now)
                 return BadRequest("Invalid Request");
 
             var newAccessToken = CreateJwt(user);
@@ -234,7 +236,8 @@ namespace TheWanderLustWebAPI.Controllers
             user.RefreshToken = newRefreshToken;
             await _authContext.SaveChangesAsync();
 
-            return Ok(new LoginApiDto{
+            return Ok(new LoginApiDto
+            {
                 AccessToken = newAccessToken,
                 RefreshToken = newRefreshToken,
             });
@@ -243,7 +246,7 @@ namespace TheWanderLustWebAPI.Controllers
         [HttpGet("getUserDetails")]
         public IActionResult GetUserDetails([FromQuery] string email)
         {
-            if(string.IsNullOrWhiteSpace(email))
+            if (string.IsNullOrWhiteSpace(email))
             {
                 return BadRequest("Email Parameter is required");
             }

@@ -17,7 +17,7 @@ builder.Services.AddDbContext<AppDbContext>(options =>
         ServerVersion.AutoDetect(builder.Configuration.GetConnectionString("SqlServerConnStr"))
     );
 });
-
+builder.Services.AddScoped<CloudinaryService>();
 builder.Services.AddAuthentication(x => 
 {
     x.DefaultScheme = JwtBearerDefaults.AuthenticationScheme;

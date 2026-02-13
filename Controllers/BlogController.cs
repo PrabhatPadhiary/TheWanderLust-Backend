@@ -13,10 +13,12 @@ namespace TheWanderLustWebAPI.Controllers
     {
         private readonly IWebHostEnvironment _env;
         private readonly AppDbContext _dbContext;
-        public BlogController(AppDbContext appDbContext, IWebHostEnvironment env)
+        private readonly CloudinaryService _cloudinaryService;
+        public BlogController(AppDbContext appDbContext, IWebHostEnvironment env, CloudinaryService cloudinaryService)
         {
             _env = env ?? throw new ArgumentNullException(nameof(env));
             _dbContext = appDbContext;
+            _cloudinaryService = cloudinaryService;
         }
 
         [HttpPost("postblog")]
@@ -43,12 +45,7 @@ namespace TheWanderLustWebAPI.Controllers
                 for (int i = 0; i < blogreq.Images.Count; i++)
                 {
                     var file = blogreq.Images[i];
-                    var filePath = Path.Combine(_env.WebRootPath, "uploads", file.FileName);
-                    using (var stream = new FileStream(filePath, FileMode.Create))
-                    {
-                        await file.CopyToAsync(stream);
-                    }
-                    var imageUrl = $"/uploads/{file.FileName}";
+                    var imageUrl = await _cloudinaryService.UploadImageAsync(file, "travel_posts");
                     imageUrls.Add(imageUrl);
                     Console.WriteLine("imageurl", imageUrl);
                     Console.WriteLine("width", blogreq.ImageWidths[i]);
