@@ -13,12 +13,9 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddDbContext<AppDbContext>(options =>
-{
-    options.UseMySql(
-        builder.Configuration.GetConnectionString("SqlServerConnStr"), 
-        ServerVersion.AutoDetect(builder.Configuration.GetConnectionString("SqlServerConnStr"))
-    );
-});
+    options.UseNpgsql(
+        builder.Configuration.GetConnectionString("SqlServerConnStr")
+    ));
 builder.Services.AddScoped<CloudinaryService>();
 builder.Services.Configure<CloudinarySettings>(
     builder.Configuration.GetSection("Cloudinary"));

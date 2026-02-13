@@ -158,7 +158,7 @@ namespace TheWanderLustWebAPI.Controllers
                 {
                     BlogId = likeDto.BlogId,
                     UserEmail = likeDto.UserEmail,
-                    CreatedAt = DateTime.Now
+                    CreatedAt = DateTime.UtcNow
                 };
 
                 _dbContext.BlogLikes.Add(blogLike);
@@ -184,7 +184,7 @@ namespace TheWanderLustWebAPI.Controllers
             var comment = new BlogComments
             {
                 Author = commentDto.Author,
-                CreatedAt = DateTime.Now,
+                CreatedAt = DateTime.UtcNow,
                 Content = commentDto.Content,
                 BlogId = commentDto.BlogId,
             };

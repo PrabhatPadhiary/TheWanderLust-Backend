@@ -46,7 +46,7 @@ namespace TheWanderLustWebAPI.Controllers
             var newAccessToken = user.Token;
             var newRefreshToken = CreateRefreshToken();
             user.RefreshToken = newRefreshToken;
-            user.RefreshTokenExpiryTime = DateTime.Now.AddDays(1);
+            user.RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(1);
             await _authContext.SaveChangesAsync();
 
             return Ok(new LoginApiDto()
@@ -96,7 +96,8 @@ namespace TheWanderLustWebAPI.Controllers
                 Password = PasswordHasher.HashPassword(userDto.Password),
                 Role = "User",
                 Token = "",
-                ProfilePictureUrl = profilePicUrl
+                ProfilePictureUrl = profilePicUrl,
+                RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(7)
             };
 
             await _authContext.Users.AddAsync(user);

@@ -7,7 +7,6 @@ namespace TheWanderLustWebAPI.Context
     {
         public AppDbContext(DbContextOptions<AppDbContext> options) : base(options)
         {
-
         }
 
         public DbSet<User> Users { get; set; }
@@ -15,143 +14,95 @@ namespace TheWanderLustWebAPI.Context
         public DbSet<BlogLikes> BlogLikes { get; set; }
         public DbSet<ImageMetadata> ImageMetadata { get; set; }
         public DbSet<BlogComments> BlogComments { get; set; }
+
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
-            modelBuilder.Entity<User>().ToTable("User");
+            // ------------------- Users Table -------------------
+            modelBuilder.Entity<User>(entity =>
+            {
+                entity.ToTable("users"); // lowercase, plural, safe
 
-            // Explicitly defining column types for MySQL compatibility
-            modelBuilder.Entity<User>()
-                .Property(u => u.FirstName)
-                .HasColumnType("VARCHAR(255)");
+                entity.HasKey(u => u.Id);
 
-            modelBuilder.Entity<User>()
-                .Property(u => u.LastName)
-                .HasColumnType("VARCHAR(255)");
+                entity.Property(u => u.Id)
+                    .ValueGeneratedOnAdd();
 
-            modelBuilder.Entity<User>()
-                .Property(u => u.Email)
-                .HasColumnType("VARCHAR(255)");
+                entity.Property(u => u.FirstName).HasColumnType("VARCHAR(255)");
+                entity.Property(u => u.LastName).HasColumnType("VARCHAR(255)");
+                entity.Property(u => u.Email).HasColumnType("VARCHAR(255)").IsRequired();
+                entity.HasIndex(u => u.Email).IsUnique();
 
-            modelBuilder.Entity<User>()
-                .Property(u => u.Username)
-                .HasColumnType("VARCHAR(255)");
+                entity.Property(u => u.Username).HasColumnType("VARCHAR(255)");
+                entity.Property(u => u.Password).HasColumnType("VARCHAR(255)");
+                entity.Property(u => u.Role).HasColumnType("VARCHAR(255)");
+                entity.Property(u => u.Token).HasColumnType("TEXT");
+                entity.Property(u => u.ProfilePictureUrl).HasColumnType("TEXT");
+                entity.Property(u => u.RefreshToken).HasColumnType("TEXT");
+                entity.Property(u => u.RefreshTokenExpiryTime)
+                      .HasColumnType("timestamp with time zone");
+            });
 
-            modelBuilder.Entity<User>()
-                .Property(u => u.Password)
-                .HasColumnType("VARCHAR(255)");
+            // ------------------- Blogs Table -------------------
+            modelBuilder.Entity<Blog>(entity =>
+            {
+                entity.ToTable("blogs");
 
-            modelBuilder.Entity<User>()
-                .Property(u => u.Role)
-                .HasColumnType("VARCHAR(255)");
+                entity.Property(b => b.Heading).HasColumnType("TEXT");
+                entity.Property(b => b.Tagline).HasColumnType("TEXT");
+                entity.Property(b => b.Content).HasColumnType("TEXT");
+                entity.Property(b => b.Location).HasColumnType("VARCHAR(255)");
+                entity.Property(b => b.CreatedAt).HasColumnType("timestamp with time zone");
 
-            modelBuilder.Entity<User>()
-                .Property(u => u.Token)
-                .HasColumnType("TEXT");
+                entity.HasOne(b => b.User)
+                      .WithMany(u => u.Blogs)
+                      .HasForeignKey(b => b.UserEmail)
+                      .HasPrincipalKey(u => u.Email);
+            });
 
-            modelBuilder.Entity<User>()
-                .Property(u => u.RefreshToken)
-                .HasColumnType("TEXT");
-
-            modelBuilder.Entity<User>()
-                .Property(u => u.RefreshTokenExpiryTime)
-                .HasColumnType("DATETIME");
-
-            modelBuilder.Entity<User>()
-                .Property(u => u.Id)
-                .ValueGeneratedOnAdd();
-
-            //Blog Table Mapping
-
-            modelBuilder.Entity<Blog>()
-                .Property(b => b.Heading)
-                .HasColumnType("TEXT");
-
-            modelBuilder.Entity<Blog>()
-                .Property(b => b.Tagline)
-                .HasColumnType("TEXT");
-
-            modelBuilder.Entity<Blog>()
-                .Property(b => b.Content)
-                .HasColumnType("TEXT");
-
-            modelBuilder.Entity<Blog>()
-                .Property(b => b.Location)
-                .HasColumnType("VARCHAR(255)");
-
-            modelBuilder.Entity<Blog>()
-                .Property(b => b.CreatedAt)
-                .HasColumnType("DATETIME");
-
-            modelBuilder.Entity<Blog>()
-                .HasOne(b => b.User)
-                .WithMany(u => u.Blogs)
-                .HasForeignKey(b => b.UserEmail)
-                .HasPrincipalKey(u => u.Email);
-
-            //BlogLike Table Mapping
-
+            // ------------------- BlogLikes Table -------------------
             modelBuilder.Entity<BlogLikes>(entity =>
             {
-                entity.ToTable("BlogLike");
+                entity.ToTable("blog_likes");
 
-                entity.Property(bl => bl.UserEmail)
-                    .HasColumnType("VARCHAR(255)")
-                    .IsRequired();
-
-                entity.Property(bl => bl.CreatedAt)
-                    .HasColumnType("DATETIME");
+                entity.Property(bl => bl.UserEmail).HasColumnType("VARCHAR(255)").IsRequired();
+                entity.Property(bl => bl.CreatedAt).HasColumnType("timestamp with time zone");
 
                 entity.HasOne(bl => bl.Blog)
-                    .WithMany(b => b.Likes)
-                    .HasForeignKey(bl => bl.BlogId)
-                    .OnDelete(DeleteBehavior.Cascade);
+                      .WithMany(b => b.Likes)
+                      .HasForeignKey(bl => bl.BlogId)
+                      .OnDelete(DeleteBehavior.Cascade);
 
-                entity.HasIndex(bl => new { bl.BlogId, bl.UserEmail })
-                    .IsUnique();
+                entity.HasIndex(bl => new { bl.BlogId, bl.UserEmail }).IsUnique();
             });
 
-            //ImageMetaData Table Mapping
+            // ------------------- ImageMetadata Table -------------------
             modelBuilder.Entity<ImageMetadata>(entity =>
             {
-                entity.ToTable("ImageMetadata");
+                entity.ToTable("image_metadata");
 
-                entity.Property(im => im.Url)
-                    .IsRequired()
-                    .HasColumnType("TEXT");
+                entity.Property(im => im.Url).IsRequired().HasColumnType("TEXT");
+                entity.Property(im => im.Width).IsRequired();
+                entity.Property(im => im.Height).IsRequired();
 
-                entity.Property(im => im.Width)
-                    .IsRequired();
-
-                entity.Property(im => im.Height)
-                    .IsRequired();
-
-                // Setup the relationship with Blog.
                 entity.HasOne(im => im.Blog)
-                    .WithMany(b => b.ImagesMetadata)
-                    .HasForeignKey(im => im.BlogId)
-                    .OnDelete(DeleteBehavior.Cascade);
+                      .WithMany(b => b.ImagesMetadata)
+                      .HasForeignKey(im => im.BlogId)
+                      .OnDelete(DeleteBehavior.Cascade);
             });
 
-            // BlogComments Table Mapping
+            // ------------------- BlogComments Table -------------------
             modelBuilder.Entity<BlogComments>(entity =>
             {
-                entity.ToTable("BlogComments");
+                entity.ToTable("blog_comments");
 
-                entity.Property(bc => bc.Content)
-                    .IsRequired()
-                    .HasColumnType("TEXT");
-
-                entity.Property(bc => bc.Author)
-                    .IsRequired()
-                    .HasColumnType("VARCHAR(255)");
-
-                entity.Property(bc => bc.CreatedAt)
-                    .HasColumnType("DATETIME");
+                entity.Property(bc => bc.Content).IsRequired().HasColumnType("TEXT");
+                entity.Property(bc => bc.Author).IsRequired().HasColumnType("VARCHAR(255)");
+                entity.Property(bc => bc.CreatedAt).HasColumnType("timestamp with time zone");
 
                 entity.HasOne(bc => bc.Blog)
-                    .WithMany(b => b.Comments)
-                    .HasForeignKey(bc => bc.BlogId)
-                    .OnDelete(DeleteBehavior.Cascade);
+                      .WithMany(b => b.Comments)
+                      .HasForeignKey(bc => bc.BlogId)
+                      .OnDelete(DeleteBehavior.Cascade);
             });
         }
     }
