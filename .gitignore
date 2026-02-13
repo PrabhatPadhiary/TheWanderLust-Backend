@@ -16,4 +16,5 @@ obj/
 logs/
 *.log
 appsettings.Development.json
+appsettings.Production.json
 secrets.json
