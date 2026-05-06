@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using TheWanderLustWebAPI.Context;
+using TheWanderLustWebAPI.Services;
 using TheWanderLustWebAPI.Settings;
 
 
@@ -19,6 +20,10 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 builder.Services.AddScoped<CloudinaryService>();
 builder.Services.Configure<CloudinarySettings>(
     builder.Configuration.GetSection("Cloudinary"));
+
+builder.Services.Configure<GooglePlacesSettings>(
+    builder.Configuration.GetSection("GooglePlaces"));
+builder.Services.AddHttpClient<IGooglePlacesService, GooglePlacesService>();
 
 builder.Services.AddAuthentication(x => 
 {
