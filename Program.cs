@@ -23,7 +23,12 @@ builder.Services.Configure<CloudinarySettings>(
 
 builder.Services.Configure<GooglePlacesSettings>(
     builder.Configuration.GetSection("GooglePlaces"));
+builder.Services.AddMemoryCache();
 builder.Services.AddHttpClient<IGooglePlacesService, GooglePlacesService>();
+
+builder.Services.Configure<PexelsSettings>(
+    builder.Configuration.GetSection("Pexels"));
+builder.Services.AddHttpClient<IPexelsService, PexelsService>();
 
 builder.Services.AddAuthentication(x => 
 {

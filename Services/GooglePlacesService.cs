@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
 using TheWanderLustWebAPI.Models.Dtos;
 using TheWanderLustWebAPI.Settings;
@@ -9,67 +10,116 @@ namespace TheWanderLustWebAPI.Services
     {
         private readonly HttpClient _httpClient;
         private readonly GooglePlacesSettings _settings;
+        private readonly IMemoryCache _cache;
+        private static readonly TimeSpan CacheDuration = TimeSpan.FromHours(24);
 
-        public GooglePlacesService(HttpClient httpClient, IOptions<GooglePlacesSettings> options)
+        public GooglePlacesService(HttpClient httpClient, IOptions<GooglePlacesSettings> options, IMemoryCache cache)
         {
             _httpClient = httpClient;
             _settings = options.Value;
+            _cache = cache;
         }
 
-        public async Task<PlaceCategoriesResponseDto> GetAllCategories(string placeId)
+        public async Task<PlaceCategoriesResponseDto> GetAllCategories(string placeId, CancellationToken cancellationToken = default)
         {
             if (string.IsNullOrWhiteSpace(placeId))
                 throw new ArgumentException("Place ID cannot be null or empty.", nameof(placeId));
 
-            // 1. Get place details (only the fields we need)
+            var cacheKey = $"destinations_{placeId}";
+            if (_cache.TryGetValue(cacheKey, out PlaceCategoriesResponseDto cachedResult))
+                return cachedResult;
+
+            //Get place details to extract the destination name
             var detailsUrl = $"{_settings.BaseUrl}/details/json?place_id={placeId}&fields=place_id,name,formatted_address,geometry&key={_settings.ApiKey}";
-            var detailsResponse = await _httpClient.GetAsync(detailsUrl);
+            var detailsResponse = await _httpClient.GetAsync(detailsUrl, cancellationToken);
             detailsResponse.EnsureSuccessStatusCode();
 
-            var placeDetails = await detailsResponse.Content.ReadFromJsonAsync<GooglePlacesApiResponse>();
+            var placeDetails = await detailsResponse.Content.ReadFromJsonAsync<GooglePlacesApiResponse>(cancellationToken: cancellationToken);
             var dto = MapToDto(placeDetails);
 
-            // 2. If we have coordinates, make 3 nearby search calls in parallel
-            if (dto.Geometry != null)
+            //Use the place name to build text search queries
+            var placeName = dto.Name;
+            if (!string.IsNullOrWhiteSpace(placeName))
             {
-                var lat = dto.Geometry.Latitude;
-                var lng = dto.Geometry.Longitude;
+                var restaurantsTask = TextSearchPlaces($"best restaurants in {placeName}", cancellationToken);
+                var staysTask = TextSearchPlaces($"best hotels in {placeName}", cancellationToken);
+                var tourismTask = TextSearchPlaces($"top tourist attractions in {placeName}", cancellationToken);
 
-                var restaurantsTask = GetNearbyPlaces(lat, lng, "restaurant");
-                var lodgingTask = GetNearbyPlaces(lat, lng, "lodging");
-                var attractionsTask = GetNearbyPlaces(lat, lng, "tourist_attraction");
-
-                await Task.WhenAll(restaurantsTask, lodgingTask, attractionsTask);
+                await Task.WhenAll(restaurantsTask, staysTask, tourismTask);
 
                 dto.Restaurants = restaurantsTask.Result;
-                dto.Lodging = lodgingTask.Result;
-                dto.TouristAttractions = attractionsTask.Result;
+                dto.Lodging = staysTask.Result;
+                dto.TouristAttractions = tourismTask.Result;
             }
 
+            _cache.Set(cacheKey, dto, CacheDuration);
             return dto;
         }
 
-        private async Task<List<NearbyPlaceDto>> GetNearbyPlaces(double latitude, double longitude, string type)
+        public async Task<List<PlaceDto>> SearchByFilter(string placeId, string filter, CancellationToken cancellationToken = default)
         {
-            var url = $"{_settings.BaseUrl}/nearbysearch/json?location={latitude},{longitude}&radius=5000&type={type}&key={_settings.ApiKey}";
-            var response = await _httpClient.GetAsync(url);
-            response.EnsureSuccessStatusCode();
+            if (string.IsNullOrWhiteSpace(placeId))
+                throw new ArgumentException("Place ID cannot be null or empty.", nameof(placeId));
+            if (string.IsNullOrWhiteSpace(filter))
+                throw new ArgumentException("Filter cannot be null or empty.", nameof(filter));
 
-            var content = await response.Content.ReadFromJsonAsync<GoogleNearbySearchResponse>();
-            return MapNearbyResults(content);
+            var filterCacheKey = $"destinations_filter_{placeId}_{filter.ToLowerInvariant()}";
+            if (_cache.TryGetValue(filterCacheKey, out List<PlaceDto> cachedFilterResult))
+                return cachedFilterResult;
+
+            // Get the place name from the main search cache, or fetch it
+            var mainCacheKey = $"destinations_{placeId}";
+            string placeName;
+            if (_cache.TryGetValue(mainCacheKey, out PlaceCategoriesResponseDto cachedMain))
+            {
+                placeName = cachedMain.Name;
+            }
+            else
+            {
+                var detailsUrl = $"{_settings.BaseUrl}/details/json?place_id={placeId}&fields=name&key={_settings.ApiKey}";
+                var detailsResponse = await _httpClient.GetAsync(detailsUrl, cancellationToken);
+                detailsResponse.EnsureSuccessStatusCode();
+                var placeDetails = await detailsResponse.Content.ReadFromJsonAsync<GooglePlacesApiResponse>(cancellationToken: cancellationToken);
+                placeName = placeDetails?.Result?.Name;
+            }
+
+            if (string.IsNullOrWhiteSpace(placeName))
+                return new List<PlaceDto>();
+
+            var query = $"top {filter} in {placeName}";
+            var results = await TextSearchPlaces(query, cancellationToken);
+
+            _cache.Set(filterCacheKey, results, CacheDuration);
+            return results;
         }
 
-        private List<NearbyPlaceDto> MapNearbyResults(GoogleNearbySearchResponse response)
+        private async Task<List<PlaceDto>> TextSearchPlaces(string query, CancellationToken cancellationToken)
+        {
+            var encodedQuery = Uri.EscapeDataString(query);
+            var url = $"{_settings.BaseUrl}/textsearch/json?query={encodedQuery}&language=en&key={_settings.ApiKey}";
+            var response = await _httpClient.GetAsync(url, cancellationToken);
+            response.EnsureSuccessStatusCode();
+
+            var content = await response.Content.ReadFromJsonAsync<GoogleTextSearchResponse>(cancellationToken: cancellationToken);
+            return MapTextSearchResults(content);
+        }
+
+        private List<PlaceDto> MapTextSearchResults(GoogleTextSearchResponse response)
         {
             if (response?.Results == null)
-                return new List<NearbyPlaceDto>();
+                return new List<PlaceDto>();
 
-            return response.Results.Select(r => new NearbyPlaceDto
+            return response.Results
+                .Where(r => r.Rating >= 4.0 && r.UserRatingsTotal >= 500)
+                .OrderByDescending(r => (r.Rating ?? 0) * Math.Log10((r.UserRatingsTotal ?? 0) + 1))
+                .Take(8)
+                .Select(r => new PlaceDto
             {
                 PlaceId = r.PlaceId,
                 Name = r.Name,
-                Vicinity = r.Vicinity,
+                Vicinity = r.FormattedAddress,
                 Rating = r.Rating,
+                UserRatingsTotal = r.UserRatingsTotal,
                 Types = r.Types ?? new List<string>(),
                 Geometry = r.Geometry?.Location != null
                     ? new GeometryDto
@@ -80,9 +130,7 @@ namespace TheWanderLustWebAPI.Services
                     : null,
                 Photos = r.Photos?.Select(p => new PhotoDto
                 {
-                    PhotoReference = p.PhotoReference,
-                    Width = p.Width,
-                    Height = p.Height
+                    Url = $"{_settings.BaseUrl}/photo?maxwidth=800&photo_reference={p.PhotoReference}&key={_settings.ApiKey}"
                 }).ToList() ?? new List<PhotoDto>()
             }).ToList();
         }
