@@ -120,6 +120,7 @@ namespace TheWanderLustWebAPI.Services
                 Vicinity = r.FormattedAddress,
                 Rating = r.Rating,
                 UserRatingsTotal = r.UserRatingsTotal,
+                PriceLevel = r.PriceLevel,
                 Types = r.Types ?? new List<string>(),
                 Geometry = r.Geometry?.Location != null
                     ? new GeometryDto
@@ -128,7 +129,7 @@ namespace TheWanderLustWebAPI.Services
                         Longitude = r.Geometry.Location.Lng
                     }
                     : null,
-                Photos = r.Photos?.Select(p => new PhotoDto
+                Photos = r.Photos?.Take(1).Select(p => new PhotoDto
                 {
                     Url = $"{_settings.BaseUrl}/photo?maxwidth=800&photo_reference={p.PhotoReference}&key={_settings.ApiKey}"
                 }).ToList() ?? new List<PhotoDto>()
@@ -153,6 +154,73 @@ namespace TheWanderLustWebAPI.Services
                     {
                         Latitude = result.Geometry.Location.Lat,
                         Longitude = result.Geometry.Location.Lng
+                    }
+                    : null
+            };
+        }
+
+        public async Task<PlaceDetailsDto> GetPlaceDetails(string placeId, CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(placeId))
+                throw new ArgumentException("Place ID cannot be null or empty.", nameof(placeId));
+
+            var cacheKey = $"place_details_{placeId}";
+            if (_cache.TryGetValue(cacheKey, out PlaceDetailsDto cachedDetails))
+                return cachedDetails;
+
+            var fields = "place_id,name,formatted_address,formatted_phone_number,website,rating,user_ratings_total,price_level,geometry,photos,reviews,opening_hours";
+            var url = $"{_settings.BaseUrl}/details/json?place_id={placeId}&fields={fields}&language=en&key={_settings.ApiKey}";
+
+            var response = await _httpClient.GetAsync(url, cancellationToken);
+            response.EnsureSuccessStatusCode();
+
+            var content = await response.Content.ReadFromJsonAsync<GooglePlaceDetailsResponse>(cancellationToken: cancellationToken);
+            var dto = MapToPlaceDetailsDto(content);
+
+            _cache.Set(cacheKey, dto, CacheDuration);
+            return dto;
+        }
+
+        private PlaceDetailsDto MapToPlaceDetailsDto(GooglePlaceDetailsResponse response)
+        {
+            var result = response?.Result;
+            if (result == null)
+                return new PlaceDetailsDto();
+
+            return new PlaceDetailsDto
+            {
+                PlaceId = result.PlaceId,
+                Name = result.Name,
+                FormattedAddress = result.FormattedAddress,
+                FormattedPhoneNumber = result.FormattedPhoneNumber,
+                Website = result.Website,
+                Rating = result.Rating,
+                UserRatingsTotal = result.UserRatingsTotal,
+                PriceLevel = result.PriceLevel,
+                Geometry = result.Geometry?.Location != null
+                    ? new GeometryDto
+                    {
+                        Latitude = result.Geometry.Location.Lat,
+                        Longitude = result.Geometry.Location.Lng
+                    }
+                    : null,
+                Photos = result.Photos?.Take(5).Select(p => new PhotoDto
+                {
+                    Url = $"{_settings.BaseUrl}/photo?maxwidth=800&photo_reference={p.PhotoReference}&key={_settings.ApiKey}"
+                }).ToList() ?? new List<PhotoDto>(),
+                Reviews = result.Reviews?.Select(r => new ReviewDto
+                {
+                    AuthorName = r.AuthorName,
+                    ProfilePhotoUrl = r.ProfilePhotoUrl,
+                    Rating = r.Rating,
+                    Text = r.Text,
+                    RelativeTimeDescription = r.RelativeTimeDescription
+                }).ToList() ?? new List<ReviewDto>(),
+                OpeningHours = result.OpeningHours != null
+                    ? new OpeningHoursDto
+                    {
+                        OpenNow = result.OpeningHours.OpenNow,
+                        WeekdayText = result.OpeningHours.WeekdayText ?? new List<string>()
                     }
                     : null
             };

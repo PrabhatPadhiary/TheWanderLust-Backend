@@ -18,6 +18,7 @@ namespace TheWanderLustWebAPI.Models.Dtos
         public string Vicinity { get; set; }
         public double? Rating { get; set; }
         public int? UserRatingsTotal { get; set; }
+        public int? PriceLevel { get; set; }
         public GeometryDto Geometry { get; set; }
         public List<PhotoDto> Photos { get; set; } = new();
         public List<string> Types { get; set; } = new();
