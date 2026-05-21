@@ -10,6 +10,7 @@ namespace TheWanderLustWebAPI.Context
         }
 
         public DbSet<User> Users { get; set; }
+        public DbSet<Favourite> Favourites { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -18,6 +19,16 @@ namespace TheWanderLustWebAPI.Context
                 entity.HasKey(e => e.Id);
                 entity.HasIndex(e => e.FirebaseId).IsUnique();
                 entity.HasIndex(e => e.Email).IsUnique();
+            });
+
+            modelBuilder.Entity<Favourite>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+                entity.HasIndex(e => new { e.UserId, e.PlaceId }).IsUnique();
+                entity.HasOne(e => e.User)
+                    .WithMany()
+                    .HasForeignKey(e => e.UserId)
+                    .OnDelete(DeleteBehavior.Cascade);
             });
         }
     }
