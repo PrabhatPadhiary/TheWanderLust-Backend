@@ -7,7 +7,17 @@ using TheWanderLustWebAPI.Context;
 using TheWanderLustWebAPI.Services;
 using TheWanderLustWebAPI.Settings;
 
-var builder = WebApplication.CreateBuilder(args);
+var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+{
+    Args = args,
+    EnvironmentName = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Production"
+});
+
+// Disable file watching to avoid inotify limit issues on shared hosting
+builder.Configuration.Sources
+    .OfType<Microsoft.Extensions.Configuration.FileConfigurationSource>()
+    .ToList()
+    .ForEach(s => s.ReloadOnChange = false);
 
 // Initialize Firebase Admin SDK
 var firebaseCredentialPath = File.Exists("/etc/secrets/firebase-service-account.json")
