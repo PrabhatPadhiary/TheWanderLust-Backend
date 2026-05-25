@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using TheWanderLustWebAPI.Context;
@@ -11,9 +12,11 @@ using TheWanderLustWebAPI.Context;
 namespace TheWanderLustWebAPI.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260525153244_TripTripDestnAndTripPlace")]
+    partial class TripTripDestnAndTripPlace
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -114,9 +117,6 @@ namespace TheWanderLustWebAPI.Migrations
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("GooglePlaceId")
-                        .HasColumnType("text");
 
                     b.Property<double?>("Latitude")
                         .HasColumnType("double precision");
@@ -246,7 +246,7 @@ namespace TheWanderLustWebAPI.Migrations
             modelBuilder.Entity("TheWanderLustWebAPI.Models.TripDestination", b =>
                 {
                     b.HasOne("TheWanderLustWebAPI.Models.Trip", "Trip")
-                        .WithMany("Destinations")
+                        .WithMany()
                         .HasForeignKey("TripId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
@@ -263,11 +263,6 @@ namespace TheWanderLustWebAPI.Migrations
                         .IsRequired();
 
                     b.Navigation("TripDestination");
-                });
-
-            modelBuilder.Entity("TheWanderLustWebAPI.Models.Trip", b =>
-                {
-                    b.Navigation("Destinations");
                 });
 
             modelBuilder.Entity("TheWanderLustWebAPI.Models.TripDestination", b =>
