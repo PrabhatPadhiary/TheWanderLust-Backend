@@ -87,12 +87,37 @@ namespace TheWanderLustWebAPI.Controllers
                 return Unauthorized();
 
             var trip = await _dbContext.Trips
+                .Include(t => t.Destinations)
                 .FirstOrDefaultAsync(t => t.Id == id && t.UserId == userId.Value);
 
             if (trip == null)
                 return NotFound("Trip not found.");
 
-            return Ok(trip);
+            return Ok(new
+            {
+                trip.Id,
+                trip.Name,
+                trip.Description,
+                trip.StartDate,
+                trip.EndDate,
+                trip.CoverPhotoUrl,
+                trip.TravelersCount,
+                trip.PrimaryDestination,
+                trip.Status,
+                trip.CreatedAt,
+                Destinations = trip.Destinations.Select(d => new
+                {
+                    d.Id,
+                    d.GooglePlaceId,
+                    d.Name,
+                    d.Latitude,
+                    d.Longitude,
+                    d.PhotoUrl,
+                    d.Order,
+                    d.StartDate,
+                    d.EndDate
+                })
+            });
         }
 
         [HttpPost]
@@ -144,6 +169,8 @@ namespace TheWanderLustWebAPI.Controllers
                     Longitude = dto.Destination.Longitude,
                     PhotoUrl = dto.Destination.PhotoUrl,
                     Order = dto.Destination.Order,
+                    StartDate = ToUtc(dto.Destination.StartDate),
+                    EndDate = ToUtc(dto.Destination.EndDate),
                     CreatedAt = DateTime.UtcNow
                 };
                 _dbContext.TripDestinations.Add(destination);
@@ -211,6 +238,77 @@ namespace TheWanderLustWebAPI.Controllers
             await _dbContext.SaveChangesAsync();
 
             return Ok(new { trip.Id, trip.Name, trip.StartDate, trip.EndDate, trip.Status });
+        }
+
+        [HttpPost("{id}/destinations")]
+        public async Task<IActionResult> AddDestination(Guid id, [FromBody] CreateTripDestinationDto dto)
+        {
+            if (string.IsNullOrWhiteSpace(dto?.Name))
+                return BadRequest("Destination name is required.");
+
+            if (string.IsNullOrWhiteSpace(dto.GooglePlaceId))
+                return BadRequest("GooglePlaceId is required.");
+
+            var userId = await GetCurrentUserId();
+            if (userId == null)
+                return Unauthorized();
+
+            var trip = await _dbContext.Trips
+                .FirstOrDefaultAsync(t => t.Id == id && t.UserId == userId.Value);
+
+            if (trip == null)
+                return NotFound("Trip not found.");
+
+            var alreadyExists = await _dbContext.TripDestinations
+                .AnyAsync(d => d.TripId == id && d.GooglePlaceId == dto.GooglePlaceId);
+
+            if (alreadyExists)
+                return Conflict("This destination is already added to the trip.");
+
+            var destination = new TripDestination
+            {
+                Id = Guid.NewGuid(),
+                TripId = id,
+                GooglePlaceId = dto.GooglePlaceId,
+                Name = dto.Name,
+                Latitude = dto.Latitude,
+                Longitude = dto.Longitude,
+                PhotoUrl = dto.PhotoUrl,
+                Order = dto.Order,
+                StartDate = ToUtc(dto.StartDate),
+                EndDate = ToUtc(dto.EndDate),
+                CreatedAt = DateTime.UtcNow
+            };
+
+            _dbContext.TripDestinations.Add(destination);
+            await _dbContext.SaveChangesAsync();
+
+            return Ok(new { destination.Id, destination.GooglePlaceId, destination.Name, destination.Latitude, destination.Longitude });
+        }
+
+        [HttpDelete("{id}/destinations/{destinationId}")]
+        public async Task<IActionResult> DeleteDestination(Guid id, Guid destinationId)
+        {
+            var userId = await GetCurrentUserId();
+            if (userId == null)
+                return Unauthorized();
+
+            var trip = await _dbContext.Trips
+                .FirstOrDefaultAsync(t => t.Id == id && t.UserId == userId.Value);
+
+            if (trip == null)
+                return NotFound("Trip not found.");
+
+            var destination = await _dbContext.TripDestinations
+                .FirstOrDefaultAsync(d => d.Id == destinationId && d.TripId == id);
+
+            if (destination == null)
+                return NotFound("Destination not found.");
+
+            _dbContext.TripDestinations.Remove(destination);
+            await _dbContext.SaveChangesAsync();
+
+            return Ok(new { message = "Destination removed from trip." });
         }
 
         [HttpDelete("{id}")]

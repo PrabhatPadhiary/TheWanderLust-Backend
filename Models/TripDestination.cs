@@ -10,6 +10,8 @@ namespace TheWanderLustWebAPI.Models
         public double? Longitude { get; set; }
         public string? PhotoUrl { get; set; }
         public int Order { get; set; } = 0;
+        public DateTime? StartDate { get; set; }
+        public DateTime? EndDate { get; set; }
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
         // Navigation properties

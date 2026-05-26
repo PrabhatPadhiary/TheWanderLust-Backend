@@ -8,6 +8,8 @@ namespace TheWanderLustWebAPI.Models.Dtos
         public double? Longitude { get; set; }
         public string? PhotoUrl { get; set; }
         public int Order { get; set; } = 0;
+        public DateTime? StartDate { get; set; }
+        public DateTime? EndDate { get; set; }
     }
 
     public class UpdateTripDestinationDto
@@ -17,5 +19,7 @@ namespace TheWanderLustWebAPI.Models.Dtos
         public double? Longitude { get; set; }
         public string? PhotoUrl { get; set; }
         public int? Order { get; set; }
+        public DateTime? StartDate { get; set; }
+        public DateTime? EndDate { get; set; }
     }
 }
