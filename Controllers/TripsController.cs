@@ -27,7 +27,8 @@ namespace TheWanderLustWebAPI.Controllers
                 return Unauthorized();
 
             var trips = await _dbContext.Trips
-                .Where(t => t.UserId == userId.Value)
+                .Where(t => t.UserId == userId.Value
+                    || t.Members.Any(m => m.UserId == userId.Value))
                 .OrderByDescending(t => t.StartDate)
                 .ToListAsync();
 
@@ -88,7 +89,9 @@ namespace TheWanderLustWebAPI.Controllers
 
             var trip = await _dbContext.Trips
                 .Include(t => t.Destinations)
-                .FirstOrDefaultAsync(t => t.Id == id && t.UserId == userId.Value);
+                .Include(t => t.Members)
+                .FirstOrDefaultAsync(t => t.Id == id
+                    && (t.UserId == userId.Value || t.Members.Any(m => m.UserId == userId.Value)));
 
             if (trip == null)
                 return NotFound("Trip not found.");
@@ -116,6 +119,12 @@ namespace TheWanderLustWebAPI.Controllers
                     d.Order,
                     d.StartDate,
                     d.EndDate
+                }),
+                Members = trip.Members.Select(m => new
+                {
+                    m.UserId,
+                    m.Role,
+                    m.JoinedAt
                 })
             });
         }
@@ -155,6 +164,17 @@ namespace TheWanderLustWebAPI.Controllers
             };
 
             _dbContext.Trips.Add(trip);
+
+            // Auto-add creator as trip owner
+            var tripMember = new TripMember
+            {
+                Id = Guid.NewGuid(),
+                TripId = trip.Id,
+                UserId = userId.Value,
+                Role = "owner",
+                JoinedAt = DateTime.UtcNow
+            };
+            _dbContext.TripMembers.Add(tripMember);
 
             TripDestination? destination = null;
             if (!string.IsNullOrWhiteSpace(dto.Destination.Name))
@@ -328,6 +348,64 @@ namespace TheWanderLustWebAPI.Controllers
             await _dbContext.SaveChangesAsync();
 
             return Ok(new { message = "Trip deleted." });
+        }
+
+        [HttpPost("{id}/join")]
+        public async Task<IActionResult> Join(Guid id)
+        {
+            var userId = await GetCurrentUserId();
+            if (userId == null)
+                return Unauthorized();
+
+            var trip = await _dbContext.Trips
+                .Include(t => t.Destinations)
+                .Include(t => t.Members)
+                .FirstOrDefaultAsync(t => t.Id == id);
+
+            if (trip == null)
+                return NotFound("Trip not found.");
+
+            var alreadyMember = trip.Members.Any(m => m.UserId == userId.Value);
+            if (alreadyMember)
+                return Conflict("You are already a member of this trip.");
+
+            var member = new TripMember
+            {
+                Id = Guid.NewGuid(),
+                TripId = id,
+                UserId = userId.Value,
+                Role = "member",
+                JoinedAt = DateTime.UtcNow
+            };
+
+            _dbContext.TripMembers.Add(member);
+            await _dbContext.SaveChangesAsync();
+
+            return Ok(new
+            {
+                trip.Id,
+                trip.Name,
+                trip.Description,
+                trip.StartDate,
+                trip.EndDate,
+                trip.CoverPhotoUrl,
+                trip.TravelersCount,
+                trip.PrimaryDestination,
+                trip.Status,
+                trip.CreatedAt,
+                Destinations = trip.Destinations.Select(d => new
+                {
+                    d.Id,
+                    d.GooglePlaceId,
+                    d.Name,
+                    d.Latitude,
+                    d.Longitude,
+                    d.PhotoUrl,
+                    d.Order,
+                    d.StartDate,
+                    d.EndDate
+                })
+            });
         }
 
         private async Task<Guid?> GetCurrentUserId()

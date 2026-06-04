@@ -36,5 +36,6 @@ namespace TheWanderLustWebAPI.Models
         // Navigation properties
         public User User { get; set; }
         public ICollection<TripDestination> Destinations { get; set; } = new List<TripDestination>();
+        public ICollection<TripMember> Members { get; set; } = new List<TripMember>();
     }
 }
