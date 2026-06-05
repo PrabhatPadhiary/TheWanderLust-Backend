@@ -27,6 +27,8 @@ namespace TheWanderLustWebAPI.Controllers
                 return Unauthorized();
 
             var trips = await _dbContext.Trips
+                .Include(t => t.Destinations)
+                    .ThenInclude(d => d.Places)
                 .Where(t => t.UserId == userId.Value
                     || t.Members.Any(m => m.UserId == userId.Value))
                 .OrderByDescending(t => t.StartDate)
@@ -43,7 +45,11 @@ namespace TheWanderLustWebAPI.Controllers
                 t.TravelersCount,
                 t.PrimaryDestination,
                 t.Status,
-                t.CreatedAt
+                t.CreatedAt,
+                PlaceIds = t.Destinations
+                    .SelectMany(d => d.Places)
+                    .Select(p => p.PlaceId)
+                    .ToList()
             });
 
             return Ok(result);
@@ -89,7 +95,9 @@ namespace TheWanderLustWebAPI.Controllers
 
             var trip = await _dbContext.Trips
                 .Include(t => t.Destinations)
+                    .ThenInclude(d => d.Places)
                 .Include(t => t.Members)
+                    .ThenInclude(m => m.User)
                 .FirstOrDefaultAsync(t => t.Id == id
                     && (t.UserId == userId.Value || t.Members.Any(m => m.UserId == userId.Value)));
 
@@ -118,11 +126,26 @@ namespace TheWanderLustWebAPI.Controllers
                     d.PhotoUrl,
                     d.Order,
                     d.StartDate,
-                    d.EndDate
+                    d.EndDate,
+                    Places = d.Places.Select(p => new
+                    {
+                        p.Id,
+                        p.PlaceId,
+                        p.PlaceName,
+                        p.Vicinity,
+                        p.Rating,
+                        p.UserRatingsTotal,
+                        p.PhotoUrl,
+                        p.Category,
+                        p.Notes,
+                        p.CreatedAt
+                    })
                 }),
                 Members = trip.Members.Select(m => new
                 {
                     m.UserId,
+                    Name = m.User.Name,
+                    Email = m.User.Email,
                     m.Role,
                     m.JoinedAt
                 })
