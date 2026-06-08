@@ -75,6 +75,8 @@ namespace TheWanderLustWebAPI.Controllers
                 UserRatingsTotal = dto.UserRatingsTotal,
                 PhotoUrl = dto.PhotoUrl,
                 Category = dto.Category,
+                Latitude = dto.Latitude,
+                Longitude = dto.Longitude,
                 Notes = dto.Notes,
                 CreatedAt = DateTime.UtcNow
             };

@@ -137,6 +137,8 @@ namespace TheWanderLustWebAPI.Controllers
                         p.UserRatingsTotal,
                         p.PhotoUrl,
                         p.Category,
+                        p.Latitude,
+                        p.Longitude,
                         p.Notes,
                         p.CreatedAt
                     })
