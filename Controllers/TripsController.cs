@@ -280,7 +280,7 @@ namespace TheWanderLustWebAPI.Controllers
 
             await _dbContext.SaveChangesAsync();
 
-            return Ok(new { trip.Id, trip.Name, trip.StartDate, trip.EndDate, trip.Status });
+            return Ok(new { trip.Id, trip.Name, trip.StartDate, trip.EndDate, trip.Status, trip.TravelersCount });
         }
 
         [HttpPost("{id}/destinations")]

@@ -85,14 +85,22 @@ namespace TheWanderLustWebAPI.Controllers
             return Ok(new { place.Id, place.PlaceId, place.PlaceName, place.Category });
         }
 
-        [HttpDelete("{placeId}")]
-        public async Task<IActionResult> Remove(Guid tripId, Guid destinationId, Guid placeId)
+        [HttpDelete("/api/trip-places/{id}")]
+        public async Task<IActionResult> Remove(Guid id)
         {
-            if (!await OwnsDestinationAsync(tripId, destinationId))
-                return NotFound("Destination not found.");
+            var firebaseUid = User.FindFirst("firebase_uid")?.Value;
+            if (string.IsNullOrEmpty(firebaseUid))
+                return Unauthorized();
+
+            var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.FirebaseId == firebaseUid);
+            if (user == null)
+                return Unauthorized();
 
             var place = await _dbContext.TripPlaces
-                .FirstOrDefaultAsync(p => p.Id == placeId && p.TripDestinationId == destinationId);
+                .Include(p => p.TripDestination)
+                    .ThenInclude(d => d.Trip)
+                .FirstOrDefaultAsync(p => p.Id == id
+                    && p.TripDestination.Trip.UserId == user.Id);
 
             if (place == null)
                 return NotFound("Place not found.");
