@@ -1,0 +1,201 @@
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using TheWanderLustWebAPI.Context;
+using TheWanderLustWebAPI.Models;
+using TheWanderLustWebAPI.Models.Dtos;
+
+namespace TheWanderLustWebAPI.Controllers
+{
+    [ApiController]
+    [Route("api")]
+    [Authorize]
+    public class InvitationsController : ControllerBase
+    {
+        private readonly AppDbContext _dbContext;
+
+        public InvitationsController(AppDbContext dbContext)
+        {
+            _dbContext = dbContext;
+        }
+
+        /// <summary>
+        /// Create an invitation link for a trip. Only the trip owner can create invitations.
+        /// </summary>
+        [HttpPost("trips/{tripId}/invitations")]
+        public async Task<IActionResult> Create(Guid tripId, [FromBody] CreateInvitationDto dto)
+        {
+            var userId = await GetCurrentUserId();
+            if (userId == null)
+                return Unauthorized();
+
+            var trip = await _dbContext.Trips
+                .Include(t => t.Members)
+                .FirstOrDefaultAsync(t => t.Id == tripId);
+
+            if (trip == null)
+                return NotFound("Trip not found.");
+
+            // Only the trip owner can create invitations
+            var isOwner = trip.Members.Any(m => m.UserId == userId.Value && m.Role == "owner");
+            if (!isOwner)
+                return Forbid();
+
+            var validRoles = new[] { "member", "viewer" };
+            var role = string.IsNullOrWhiteSpace(dto.Role) ? "member" : dto.Role.ToLower();
+            if (!validRoles.Contains(role))
+                return BadRequest("Role must be 'member' or 'viewer'.");
+
+            var expiresInHours = dto.ExpiresInHours > 0 ? dto.ExpiresInHours : 48;
+
+            var invitation = new Invitation
+            {
+                Id = Guid.NewGuid(),
+                TripId = tripId,
+                Role = role,
+                ExpiresAt = DateTime.UtcNow.AddHours(expiresInHours),
+                CreatedAt = DateTime.UtcNow
+            };
+
+            _dbContext.Invitations.Add(invitation);
+            await _dbContext.SaveChangesAsync();
+
+            return Ok(new
+            {
+                invitation.Id,
+                invitation.TripId,
+                invitation.Role,
+                invitation.ExpiresAt
+            });
+        }
+
+        /// <summary>
+        /// Get invitation details without joining (for showing a preview to the user).
+        /// </summary>
+        [HttpGet("join/{inviteId}")]
+        public async Task<IActionResult> GetInvitation(Guid inviteId)
+        {
+            var userId = await GetCurrentUserId();
+            if (userId == null)
+                return Unauthorized();
+
+            var invitation = await _dbContext.Invitations
+                .Include(i => i.Trip)
+                .FirstOrDefaultAsync(i => i.Id == inviteId);
+
+            if (invitation == null)
+                return NotFound("Invitation not found.");
+
+            if (invitation.ExpiresAt < DateTime.UtcNow)
+                return BadRequest("This invitation has expired.");
+
+            if (invitation.UsedBy != null)
+                return BadRequest("This invitation has already been used.");
+
+            return Ok(new
+            {
+                invitation.Id,
+                invitation.Role,
+                invitation.ExpiresAt,
+                Trip = new
+                {
+                    invitation.Trip.Id,
+                    invitation.Trip.Name,
+                    invitation.Trip.Description,
+                    invitation.Trip.PrimaryDestination,
+                    invitation.Trip.CoverPhotoUrl
+                }
+            });
+        }
+
+        /// <summary>
+        /// Join a trip using an invitation link. The role is determined by the invitation, preventing URL tampering.
+        /// </summary>
+        [HttpPost("join/{inviteId}")]
+        public async Task<IActionResult> Join(Guid inviteId)
+        {
+            var userId = await GetCurrentUserId();
+            if (userId == null)
+                return Unauthorized();
+
+            var invitation = await _dbContext.Invitations
+                .Include(i => i.Trip)
+                    .ThenInclude(t => t.Destinations)
+                .Include(i => i.Trip)
+                    .ThenInclude(t => t.Members)
+                .FirstOrDefaultAsync(i => i.Id == inviteId);
+
+            if (invitation == null)
+                return NotFound("Invitation not found.");
+
+            if (invitation.ExpiresAt < DateTime.UtcNow)
+                return BadRequest("This invitation has expired.");
+
+            if (invitation.UsedBy != null)
+                return BadRequest("This invitation has already been used.");
+
+            // Check if user is already a member
+            var alreadyMember = invitation.Trip.Members.Any(m => m.UserId == userId.Value);
+            if (alreadyMember)
+                return Conflict("You are already a member of this trip.");
+
+            // Add user as a trip member with the role specified in the invitation
+            var member = new TripMember
+            {
+                Id = Guid.NewGuid(),
+                TripId = invitation.TripId,
+                UserId = userId.Value,
+                Role = invitation.Role,
+                JoinedAt = DateTime.UtcNow
+            };
+
+            _dbContext.TripMembers.Add(member);
+
+            // Mark invitation as used
+            invitation.UsedBy = userId.Value;
+
+            await _dbContext.SaveChangesAsync();
+
+            var trip = invitation.Trip;
+
+            return Ok(new
+            {
+                trip.Id,
+                trip.Name,
+                trip.Description,
+                trip.StartDate,
+                trip.EndDate,
+                trip.CoverPhotoUrl,
+                trip.TravelersCount,
+                trip.PrimaryDestination,
+                trip.TotalBudget,
+                trip.Currency,
+                trip.Status,
+                trip.CreatedAt,
+                MemberRole = invitation.Role,
+                Destinations = trip.Destinations.Select(d => new
+                {
+                    d.Id,
+                    d.GooglePlaceId,
+                    d.Name,
+                    d.Latitude,
+                    d.Longitude,
+                    d.PhotoUrl,
+                    d.Order,
+                    d.StartDate,
+                    d.EndDate
+                })
+            });
+        }
+
+        private async Task<Guid?> GetCurrentUserId()
+        {
+            var firebaseUid = User.FindFirst("firebase_uid")?.Value;
+            if (string.IsNullOrEmpty(firebaseUid))
+                return null;
+
+            var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.FirebaseId == firebaseUid);
+            return user?.Id;
+        }
+    }
+}

@@ -16,6 +16,7 @@ namespace TheWanderLustWebAPI.Context
         public DbSet<TripPlace> TripPlaces { get; set; }
         public DbSet<TripMember> TripMembers { get; set; }
         public DbSet<TripExpense> TripExpenses { get; set; }
+        public DbSet<Invitation> Invitations { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -87,6 +88,20 @@ namespace TheWanderLustWebAPI.Context
                     .WithMany()
                     .HasForeignKey(e => e.TripId)
                     .OnDelete(DeleteBehavior.Cascade);
+            });
+
+            modelBuilder.Entity<Invitation>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+                entity.HasOne(e => e.Trip)
+                    .WithMany()
+                    .HasForeignKey(e => e.TripId)
+                    .OnDelete(DeleteBehavior.Cascade);
+                entity.HasOne(e => e.UsedByUser)
+                    .WithMany()
+                    .HasForeignKey(e => e.UsedBy)
+                    .OnDelete(DeleteBehavior.SetNull)
+                    .IsRequired(false);
             });
         }
     }
