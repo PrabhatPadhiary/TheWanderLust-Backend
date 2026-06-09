@@ -44,6 +44,8 @@ namespace TheWanderLustWebAPI.Controllers
                 t.CoverPhotoUrl,
                 t.TravelersCount,
                 t.PrimaryDestination,
+                t.TotalBudget,
+                t.Currency,
                 t.Status,
                 t.CreatedAt,
                 PlaceIds = t.Destinations
@@ -114,6 +116,8 @@ namespace TheWanderLustWebAPI.Controllers
                 trip.CoverPhotoUrl,
                 trip.TravelersCount,
                 trip.PrimaryDestination,
+                trip.TotalBudget,
+                trip.Currency,
                 trip.Status,
                 trip.CreatedAt,
                 Destinations = trip.Destinations.Select(d => new
@@ -184,6 +188,8 @@ namespace TheWanderLustWebAPI.Controllers
                 CoverPhotoUrl = dto.CoverPhotoUrl,
                 TravelersCount = dto.TravelersCount,
                 PrimaryDestination = dto.PrimaryDestination,
+                TotalBudget = dto.TotalBudget,
+                Currency = dto.Currency,
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow
             };
@@ -278,6 +284,12 @@ namespace TheWanderLustWebAPI.Controllers
             if (dto.PrimaryDestination != null)
                 trip.PrimaryDestination = dto.PrimaryDestination;
 
+            if (dto.TotalBudget.HasValue)
+                trip.TotalBudget = dto.TotalBudget.Value;
+
+            if (dto.Currency != null)
+                trip.Currency = dto.Currency;
+
             trip.UpdatedAt = DateTime.UtcNow;
 
             await _dbContext.SaveChangesAsync();
@@ -356,9 +368,33 @@ namespace TheWanderLustWebAPI.Controllers
             return Ok(new { message = "Destination removed from trip." });
         }
 
-        [HttpDelete("{id}")]
-        public async Task<IActionResult> Delete(Guid id)
+        [HttpPut("{id}/budget")]
+        public async Task<IActionResult> SetBudget(Guid id, [FromBody] SetTripBudgetDto dto)
         {
+            if (dto.TotalBudget <= 0)
+                return BadRequest("Budget must be greater than zero.");
+
+            var userId = await GetCurrentUserId();
+            if (userId == null)
+                return Unauthorized();
+
+            var trip = await _dbContext.Trips
+                .FirstOrDefaultAsync(t => t.Id == id && t.UserId == userId.Value);
+
+            if (trip == null)
+                return NotFound("Trip not found.");
+
+            trip.TotalBudget = dto.TotalBudget;
+            trip.Currency = string.IsNullOrWhiteSpace(dto.Currency) ? "₹" : dto.Currency;
+            trip.UpdatedAt = DateTime.UtcNow;
+
+            await _dbContext.SaveChangesAsync();
+
+            return Ok(new { trip.TotalBudget, trip.Currency });
+        }
+
+        [HttpDelete("{id}")]
+        public async Task<IActionResult> Delete(Guid id)        {
             var userId = await GetCurrentUserId();
             if (userId == null)
                 return Unauthorized();
@@ -416,6 +452,8 @@ namespace TheWanderLustWebAPI.Controllers
                 trip.CoverPhotoUrl,
                 trip.TravelersCount,
                 trip.PrimaryDestination,
+                trip.TotalBudget,
+                trip.Currency,
                 trip.Status,
                 trip.CreatedAt,
                 Destinations = trip.Destinations.Select(d => new

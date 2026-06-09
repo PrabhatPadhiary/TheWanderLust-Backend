@@ -15,6 +15,7 @@ namespace TheWanderLustWebAPI.Context
         public DbSet<TripDestination> TripDestinations { get; set; }
         public DbSet<TripPlace> TripPlaces { get; set; }
         public DbSet<TripMember> TripMembers { get; set; }
+        public DbSet<TripExpense> TripExpenses { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -38,6 +39,7 @@ namespace TheWanderLustWebAPI.Context
             modelBuilder.Entity<Trip>(entity =>
             {
                 entity.HasKey(e => e.Id);
+                entity.Property(e => e.TotalBudget).HasColumnType("decimal(18,2)");
                 entity.HasOne(e => e.User)
                     .WithMany()
                     .HasForeignKey(e => e.UserId)
@@ -73,6 +75,17 @@ namespace TheWanderLustWebAPI.Context
                 entity.HasOne(e => e.User)
                     .WithMany()
                     .HasForeignKey(e => e.UserId)
+                    .OnDelete(DeleteBehavior.Cascade);
+            });
+
+            modelBuilder.Entity<TripExpense>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+                entity.Property(e => e.Amount).HasColumnType("decimal(18,2)");
+                entity.Property(e => e.Category).HasConversion<string>();
+                entity.HasOne(e => e.Trip)
+                    .WithMany()
+                    .HasForeignKey(e => e.TripId)
                     .OnDelete(DeleteBehavior.Cascade);
             });
         }

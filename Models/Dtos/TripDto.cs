@@ -9,6 +9,8 @@ namespace TheWanderLustWebAPI.Models.Dtos
         public string? CoverPhotoUrl { get; set; }
         public int TravelersCount { get; set; }
         public string? PrimaryDestination { get; set; }
+        public decimal? TotalBudget { get; set; }
+        public string? Currency { get; set; }
         public CreateTripDestinationDto Destination { get; set; }
     }
 
@@ -21,5 +23,13 @@ namespace TheWanderLustWebAPI.Models.Dtos
         public string? CoverPhotoUrl { get; set; }
         public int? TravelersCount { get; set; }
         public string? PrimaryDestination { get; set; }
+        public decimal? TotalBudget { get; set; }
+        public string? Currency { get; set; }
+    }
+
+    public class SetTripBudgetDto
+    {
+        public decimal TotalBudget { get; set; }
+        public string? Currency { get; set; }
     }
 }

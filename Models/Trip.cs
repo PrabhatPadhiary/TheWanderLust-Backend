@@ -11,6 +11,8 @@ namespace TheWanderLustWebAPI.Models
         public string? CoverPhotoUrl { get; set; }
         public int TravelersCount { get; set; }
         public string? PrimaryDestination { get; set; }
+        public decimal? TotalBudget { get; set; }
+        public string? Currency { get; set; }
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
         public DateTime UpdatedAt { get; set; }
 
