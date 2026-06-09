@@ -254,8 +254,13 @@ namespace TheWanderLustWebAPI.Controllers
             if (userId == null)
                 return Unauthorized();
 
-            var trip = await _dbContext.Trips
-                .FirstOrDefaultAsync(t => t.Id == id && t.UserId == userId.Value);
+            var role = await GetMemberRole(id, userId.Value);
+            if (role == null)
+                return NotFound("Trip not found.");
+            if (role != "owner")
+                return Forbid();
+
+            var trip = await _dbContext.Trips.FirstOrDefaultAsync(t => t.Id == id);
 
             if (trip == null)
                 return NotFound("Trip not found.");
@@ -310,11 +315,11 @@ namespace TheWanderLustWebAPI.Controllers
             if (userId == null)
                 return Unauthorized();
 
-            var trip = await _dbContext.Trips
-                .FirstOrDefaultAsync(t => t.Id == id && t.UserId == userId.Value);
-
-            if (trip == null)
+            var role = await GetMemberRole(id, userId.Value);
+            if (role == null)
                 return NotFound("Trip not found.");
+            if (role != "owner" && role != "member")
+                return Forbid();
 
             var alreadyExists = await _dbContext.TripDestinations
                 .AnyAsync(d => d.TripId == id && d.GooglePlaceId == dto.GooglePlaceId);
@@ -350,11 +355,11 @@ namespace TheWanderLustWebAPI.Controllers
             if (userId == null)
                 return Unauthorized();
 
-            var trip = await _dbContext.Trips
-                .FirstOrDefaultAsync(t => t.Id == id && t.UserId == userId.Value);
-
-            if (trip == null)
+            var role = await GetMemberRole(id, userId.Value);
+            if (role == null)
                 return NotFound("Trip not found.");
+            if (role != "owner" && role != "member")
+                return Forbid();
 
             var destination = await _dbContext.TripDestinations
                 .FirstOrDefaultAsync(d => d.Id == destinationId && d.TripId == id);
@@ -378,8 +383,13 @@ namespace TheWanderLustWebAPI.Controllers
             if (userId == null)
                 return Unauthorized();
 
-            var trip = await _dbContext.Trips
-                .FirstOrDefaultAsync(t => t.Id == id && t.UserId == userId.Value);
+            var role = await GetMemberRole(id, userId.Value);
+            if (role == null)
+                return NotFound("Trip not found.");
+            if (role != "owner")
+                return Forbid();
+
+            var trip = await _dbContext.Trips.FirstOrDefaultAsync(t => t.Id == id);
 
             if (trip == null)
                 return NotFound("Trip not found.");
@@ -394,13 +404,19 @@ namespace TheWanderLustWebAPI.Controllers
         }
 
         [HttpDelete("{id}")]
-        public async Task<IActionResult> Delete(Guid id)        {
+        public async Task<IActionResult> Delete(Guid id)
+        {
             var userId = await GetCurrentUserId();
             if (userId == null)
                 return Unauthorized();
 
-            var trip = await _dbContext.Trips
-                .FirstOrDefaultAsync(t => t.Id == id && t.UserId == userId.Value);
+            var role = await GetMemberRole(id, userId.Value);
+            if (role == null)
+                return NotFound("Trip not found.");
+            if (role != "owner")
+                return Forbid();
+
+            var trip = await _dbContext.Trips.FirstOrDefaultAsync(t => t.Id == id);
 
             if (trip == null)
                 return NotFound("Trip not found.");
@@ -421,6 +437,13 @@ namespace TheWanderLustWebAPI.Controllers
 
             var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.FirebaseId == firebaseUid);
             return user?.Id;
+        }
+
+        private async Task<string?> GetMemberRole(Guid tripId, Guid userId)
+        {
+            var member = await _dbContext.TripMembers
+                .FirstOrDefaultAsync(m => m.TripId == tripId && m.UserId == userId);
+            return member?.Role;
         }
 
         private static DateTime? ToUtc(DateTime? dt) =>

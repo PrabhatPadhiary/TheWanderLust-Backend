@@ -22,7 +22,16 @@ namespace TheWanderLustWebAPI.Controllers
         [HttpGet]
         public async Task<IActionResult> GetAll(Guid tripId, Guid destinationId)
         {
-            if (!await OwnsDestinationAsync(tripId, destinationId))
+            var userId = await GetCurrentUserId();
+            if (userId == null)
+                return Unauthorized();
+
+            var role = await GetMemberRole(tripId, userId.Value);
+            if (role == null)
+                return NotFound("Trip not found.");
+
+            // All roles (owner, member, viewer) can view places
+            if (!await DestinationExistsAsync(tripId, destinationId))
                 return NotFound("Destination not found.");
 
             var places = await _dbContext.TripPlaces
@@ -55,7 +64,17 @@ namespace TheWanderLustWebAPI.Controllers
             if (string.IsNullOrWhiteSpace(dto.Category))
                 return BadRequest("Category is required (food | stay | activity).");
 
-            if (!await OwnsDestinationAsync(tripId, destinationId))
+            var userId = await GetCurrentUserId();
+            if (userId == null)
+                return Unauthorized();
+
+            var role = await GetMemberRole(tripId, userId.Value);
+            if (role == null)
+                return NotFound("Trip not found.");
+            if (role != "owner" && role != "member")
+                return Forbid();
+
+            if (!await DestinationExistsAsync(tripId, destinationId))
                 return NotFound("Destination not found.");
 
             var alreadyAdded = await _dbContext.TripPlaces
@@ -90,22 +109,24 @@ namespace TheWanderLustWebAPI.Controllers
         [HttpDelete("/api/trip-places/{id}")]
         public async Task<IActionResult> Remove(Guid id)
         {
-            var firebaseUid = User.FindFirst("firebase_uid")?.Value;
-            if (string.IsNullOrEmpty(firebaseUid))
-                return Unauthorized();
-
-            var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.FirebaseId == firebaseUid);
-            if (user == null)
+            var userId = await GetCurrentUserId();
+            if (userId == null)
                 return Unauthorized();
 
             var place = await _dbContext.TripPlaces
                 .Include(p => p.TripDestination)
-                    .ThenInclude(d => d.Trip)
-                .FirstOrDefaultAsync(p => p.Id == id
-                    && p.TripDestination.Trip.UserId == user.Id);
+                .FirstOrDefaultAsync(p => p.Id == id);
 
             if (place == null)
                 return NotFound("Place not found.");
+
+            var tripId = place.TripDestination.TripId;
+
+            var role = await GetMemberRole(tripId, userId.Value);
+            if (role == null)
+                return NotFound("Place not found.");
+            if (role != "owner" && role != "member")
+                return Forbid();
 
             _dbContext.TripPlaces.Remove(place);
             await _dbContext.SaveChangesAsync();
@@ -113,21 +134,27 @@ namespace TheWanderLustWebAPI.Controllers
             return Ok(new { message = "Place removed from trip." });
         }
 
-        private async Task<bool> OwnsDestinationAsync(Guid tripId, Guid destinationId)
+        private async Task<Guid?> GetCurrentUserId()
         {
             var firebaseUid = User.FindFirst("firebase_uid")?.Value;
             if (string.IsNullOrEmpty(firebaseUid))
-                return false;
+                return null;
 
             var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.FirebaseId == firebaseUid);
-            if (user == null)
-                return false;
+            return user?.Id;
+        }
 
-            var ownsTrip = await _dbContext.Trips.AnyAsync(t => t.Id == tripId && t.UserId == user.Id);
-            if (!ownsTrip)
-                return false;
+        private async Task<string?> GetMemberRole(Guid tripId, Guid userId)
+        {
+            var member = await _dbContext.TripMembers
+                .FirstOrDefaultAsync(m => m.TripId == tripId && m.UserId == userId);
+            return member?.Role;
+        }
 
-            return await _dbContext.TripDestinations.AnyAsync(d => d.Id == destinationId && d.TripId == tripId);
+        private async Task<bool> DestinationExistsAsync(Guid tripId, Guid destinationId)
+        {
+            return await _dbContext.TripDestinations
+                .AnyAsync(d => d.Id == destinationId && d.TripId == tripId);
         }
     }
 }

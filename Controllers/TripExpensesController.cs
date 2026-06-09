@@ -23,9 +23,15 @@ namespace TheWanderLustWebAPI.Controllers
         [HttpGet]
         public async Task<IActionResult> GetAll(Guid tripId)
         {
-            if (!await OwnsTripAsync(tripId))
+            var userId = await GetCurrentUserId();
+            if (userId == null)
+                return Unauthorized();
+
+            var role = await GetMemberRole(tripId, userId.Value);
+            if (role == null)
                 return NotFound("Trip not found.");
 
+            // All roles (owner, member, viewer) can view expenses
             var expenses = await _dbContext.TripExpenses
                 .Where(e => e.TripId == tripId)
                 .OrderBy(e => e.Date)
@@ -51,9 +57,15 @@ namespace TheWanderLustWebAPI.Controllers
         [HttpGet("{id}")]
         public async Task<IActionResult> GetById(Guid tripId, Guid id)
         {
-            if (!await OwnsTripAsync(tripId))
+            var userId = await GetCurrentUserId();
+            if (userId == null)
+                return Unauthorized();
+
+            var role = await GetMemberRole(tripId, userId.Value);
+            if (role == null)
                 return NotFound("Trip not found.");
 
+            // All roles can view a single expense
             var expense = await _dbContext.TripExpenses
                 .Where(e => e.TripId == tripId && e.Id == id)
                 .Select(e => new
@@ -96,8 +108,15 @@ namespace TheWanderLustWebAPI.Controllers
             if (!Enum.TryParse<ExpenseCategory>(dto.Category, ignoreCase: true, out var category))
                 return BadRequest("Invalid category. Must be one of: stay, food, activity, transport, other.");
 
-            if (!await OwnsTripAsync(tripId))
+            var userId = await GetCurrentUserId();
+            if (userId == null)
+                return Unauthorized();
+
+            var role = await GetMemberRole(tripId, userId.Value);
+            if (role == null)
                 return NotFound("Trip not found.");
+            if (role != "owner" && role != "member")
+                return Forbid();
 
             var expense = new TripExpense
             {
@@ -136,14 +155,25 @@ namespace TheWanderLustWebAPI.Controllers
         [HttpPut("{id}")]
         public async Task<IActionResult> Update(Guid tripId, Guid id, [FromBody] UpdateTripExpenseDto dto)
         {
-            if (!await OwnsTripAsync(tripId))
+            var userId = await GetCurrentUserId();
+            if (userId == null)
+                return Unauthorized();
+
+            var role = await GetMemberRole(tripId, userId.Value);
+            if (role == null)
                 return NotFound("Trip not found.");
+            if (role != "owner" && role != "member")
+                return Forbid();
 
             var expense = await _dbContext.TripExpenses
                 .FirstOrDefaultAsync(e => e.TripId == tripId && e.Id == id);
 
             if (expense == null)
                 return NotFound("Expense not found.");
+
+            // Members can only edit their own expenses
+            if (role == "member" && expense.PaidByMemberId != userId.Value.ToString())
+                return Forbid();
 
             if (!string.IsNullOrWhiteSpace(dto.Title))
                 expense.Title = dto.Title;
@@ -197,8 +227,15 @@ namespace TheWanderLustWebAPI.Controllers
         [HttpDelete("{id}")]
         public async Task<IActionResult> Delete(Guid tripId, Guid id)
         {
-            if (!await OwnsTripAsync(tripId))
+            var userId = await GetCurrentUserId();
+            if (userId == null)
+                return Unauthorized();
+
+            var role = await GetMemberRole(tripId, userId.Value);
+            if (role == null)
                 return NotFound("Trip not found.");
+            if (role != "owner" && role != "member")
+                return Forbid();
 
             var expense = await _dbContext.TripExpenses
                 .FirstOrDefaultAsync(e => e.TripId == tripId && e.Id == id);
@@ -206,23 +243,31 @@ namespace TheWanderLustWebAPI.Controllers
             if (expense == null)
                 return NotFound("Expense not found.");
 
+            // Members can only delete their own expenses
+            if (role == "member" && expense.PaidByMemberId != userId.Value.ToString())
+                return Forbid();
+
             _dbContext.TripExpenses.Remove(expense);
             await _dbContext.SaveChangesAsync();
 
             return Ok(new { message = "Expense deleted." });
         }
 
-        private async Task<bool> OwnsTripAsync(Guid tripId)
+        private async Task<Guid?> GetCurrentUserId()
         {
             var firebaseUid = User.FindFirst("firebase_uid")?.Value;
             if (string.IsNullOrEmpty(firebaseUid))
-                return false;
+                return null;
 
             var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.FirebaseId == firebaseUid);
-            if (user == null)
-                return false;
+            return user?.Id;
+        }
 
-            return await _dbContext.Trips.AnyAsync(t => t.Id == tripId && t.UserId == user.Id);
+        private async Task<string?> GetMemberRole(Guid tripId, Guid userId)
+        {
+            var member = await _dbContext.TripMembers
+                .FirstOrDefaultAsync(m => m.TripId == tripId && m.UserId == userId);
+            return member?.Role;
         }
     }
 }

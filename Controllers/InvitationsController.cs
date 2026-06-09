@@ -36,9 +36,9 @@ namespace TheWanderLustWebAPI.Controllers
             if (trip == null)
                 return NotFound("Trip not found.");
 
-            // Only the trip owner can create invitations
-            var isOwner = trip.Members.Any(m => m.UserId == userId.Value && m.Role == "owner");
-            if (!isOwner)
+            // Only the trip owner or members (editors) can create invitations
+            var canInvite = trip.Members.Any(m => m.UserId == userId.Value && (m.Role == "owner" || m.Role == "member"));
+            if (!canInvite)
                 return Forbid();
 
             var validRoles = new[] { "member", "viewer" };
