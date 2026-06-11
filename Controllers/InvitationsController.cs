@@ -188,6 +188,70 @@ namespace TheWanderLustWebAPI.Controllers
             });
         }
 
+        /// <summary>
+        /// Get all invitations for a trip. Owner and editors can view.
+        /// </summary>
+        [HttpGet("trips/{tripId}/invitations")]
+        public async Task<IActionResult> GetAll(Guid tripId)
+        {
+            var userId = await GetCurrentUserId();
+            if (userId == null)
+                return Unauthorized();
+
+            var role = await GetMemberRole(tripId, userId.Value);
+            if (role == null)
+                return NotFound("Trip not found.");
+            if (role != "owner" && role != "member")
+                return Forbid();
+
+            var invitations = await _dbContext.Invitations
+                .Where(i => i.TripId == tripId)
+                .OrderByDescending(i => i.CreatedAt)
+                .Select(i => new
+                {
+                    i.Id,
+                    i.TripId,
+                    i.Role,
+                    i.ExpiresAt,
+                    i.UsedBy,
+                    i.CreatedAt
+                })
+                .ToListAsync();
+
+            return Ok(invitations);
+        }
+
+        /// <summary>
+        /// Revoke (delete) an invitation. Owner and editors can revoke.
+        /// </summary>
+        [HttpDelete("trips/{tripId}/invitations/{inviteId}")]
+        public async Task<IActionResult> Revoke(Guid tripId, Guid inviteId)
+        {
+            var userId = await GetCurrentUserId();
+            if (userId == null)
+                return Unauthorized();
+
+            var role = await GetMemberRole(tripId, userId.Value);
+            if (role == null)
+                return NotFound("Trip not found.");
+            if (role != "owner" && role != "member")
+                return Forbid();
+
+            var invitation = await _dbContext.Invitations
+                .FirstOrDefaultAsync(i => i.Id == inviteId && i.TripId == tripId);
+
+            if (invitation == null)
+                return NotFound("Invitation not found.");
+
+            if (invitation.UsedBy != null)
+                return BadRequest("Cannot revoke an invitation that has already been used.");
+
+            _dbContext.Invitations.Remove(invitation);
+            await _dbContext.SaveChangesAsync();
+
+            return Ok(new { message = "Invitation revoked." });
+        }
+
         private async Task<Guid?> GetCurrentUserId()
         {
             var firebaseUid = User.FindFirst("firebase_uid")?.Value;
@@ -196,6 +260,13 @@ namespace TheWanderLustWebAPI.Controllers
 
             var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.FirebaseId == firebaseUid);
             return user?.Id;
+        }
+
+        private async Task<string?> GetMemberRole(Guid tripId, Guid userId)
+        {
+            var member = await _dbContext.TripMembers
+                .FirstOrDefaultAsync(m => m.TripId == tripId && m.UserId == userId);
+            return member?.Role;
         }
     }
 }

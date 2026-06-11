@@ -17,6 +17,7 @@ namespace TheWanderLustWebAPI.Context
         public DbSet<TripMember> TripMembers { get; set; }
         public DbSet<TripExpense> TripExpenses { get; set; }
         public DbSet<Invitation> Invitations { get; set; }
+        public DbSet<TripChecklistItem> TripChecklistItems { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -102,6 +103,29 @@ namespace TheWanderLustWebAPI.Context
                     .HasForeignKey(e => e.UsedBy)
                     .OnDelete(DeleteBehavior.SetNull)
                     .IsRequired(false);
+            });
+
+            modelBuilder.Entity<TripChecklistItem>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+                entity.HasOne(e => e.Trip)
+                    .WithMany()
+                    .HasForeignKey(e => e.TripId)
+                    .OnDelete(DeleteBehavior.Cascade);
+                entity.HasOne(e => e.AssignedToUser)
+                    .WithMany()
+                    .HasForeignKey(e => e.AssignedToUserId)
+                    .OnDelete(DeleteBehavior.SetNull)
+                    .IsRequired(false);
+                entity.HasOne(e => e.CompletedByUser)
+                    .WithMany()
+                    .HasForeignKey(e => e.CompletedByUserId)
+                    .OnDelete(DeleteBehavior.SetNull)
+                    .IsRequired(false);
+                entity.HasOne(e => e.CreatedByUser)
+                    .WithMany()
+                    .HasForeignKey(e => e.CreatedByUserId)
+                    .OnDelete(DeleteBehavior.NoAction);
             });
         }
     }
