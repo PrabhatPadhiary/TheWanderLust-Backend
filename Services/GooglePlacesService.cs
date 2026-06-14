@@ -20,44 +20,7 @@ namespace TheWanderLustWebAPI.Services
             _cache = cache;
         }
 
-        public async Task<PlaceCategoriesResponseDto> GetAllCategories(string placeId, CancellationToken cancellationToken = default)
-        {
-            if (string.IsNullOrWhiteSpace(placeId))
-                throw new ArgumentException("Place ID cannot be null or empty.", nameof(placeId));
-
-            var cacheKey = $"destinations_{placeId}";
-            if (_cache.TryGetValue(cacheKey, out PlaceCategoriesResponseDto cachedResult))
-                return cachedResult;
-
-            //Get place details to extract the destination name
-            var detailsUrl = $"{_settings.BaseUrl}/details/json?place_id={placeId}&fields=place_id,name,formatted_address,geometry&key={_settings.ApiKey}";
-            var detailsResponse = await _httpClient.GetAsync(detailsUrl, cancellationToken);
-            detailsResponse.EnsureSuccessStatusCode();
-
-            var placeDetails = await detailsResponse.Content.ReadFromJsonAsync<GooglePlacesApiResponse>(cancellationToken: cancellationToken);
-            var dto = MapToDto(placeDetails);
-
-            //Use the place name to build text search queries
-            var placeName = dto.Name;
-            if (!string.IsNullOrWhiteSpace(placeName))
-            {
-                var restaurantsTask = TextSearchPlaces($"best restaurants in {placeName}", cancellationToken);
-                var staysTask = TextSearchPlaces($"best hotels in {placeName}", cancellationToken);
-                var tourismTask = TextSearchPlaces($"top tourist attractions in {placeName}", cancellationToken);
-
-                await Task.WhenAll(restaurantsTask, staysTask, tourismTask);
-
-                dto.Restaurants = restaurantsTask.Result;
-                dto.Lodging = staysTask.Result;
-                dto.TouristAttractions = tourismTask.Result;
-            }
-
-            _cache.Set(cacheKey, dto, CacheDuration);
-            return dto;
-        }
-
-        public async Task<List<PlaceDto>> SearchByFilter(string placeId, string filter, CancellationToken cancellationToken = default)
-        {
+        public async Task<List<PlaceDto>> SearchByFilter(string placeId, string filter, CancellationToken cancellationToken = default)        {
             if (string.IsNullOrWhiteSpace(placeId))
                 throw new ArgumentException("Place ID cannot be null or empty.", nameof(placeId));
             if (string.IsNullOrWhiteSpace(filter))
@@ -91,6 +54,51 @@ namespace TheWanderLustWebAPI.Services
 
             _cache.Set(filterCacheKey, results, CacheDuration);
             return results;
+        }
+
+        // Supported categories: restaurants | stays | attractions | activities
+        private static readonly Dictionary<string, string> CategoryQueryMap = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["restaurants"] = "best restaurants in {0}",
+            ["stays"]        = "best hotels and stays in {0}",
+            ["attractions"]  = "top tourist attractions in {0}",
+            ["activities"]   = "top things to do in {0}",
+        };
+
+        public async Task<List<PlaceDto>> SearchByCategory(string placeId, string category, CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(placeId))
+                throw new ArgumentException("Place ID cannot be null or empty.", nameof(placeId));
+
+            if (!CategoryQueryMap.TryGetValue(category?.Trim() ?? "", out var queryTemplate))
+                throw new ArgumentException($"Invalid category '{category}'. Valid values: restaurants, stays, attractions, activities.");
+
+            var cacheKey = $"destinations_category_{placeId}_{category.ToLowerInvariant()}";
+            if (_cache.TryGetValue(cacheKey, out List<PlaceDto> cached))
+                return cached;
+
+            var placeName = await ResolvePlaceNameAsync(placeId, cancellationToken);
+            if (string.IsNullOrWhiteSpace(placeName))
+                return new List<PlaceDto>();
+
+            var query = string.Format(queryTemplate, placeName);
+            var results = await TextSearchPlaces(query, cancellationToken);
+
+            _cache.Set(cacheKey, results, CacheDuration);
+            return results;
+        }
+
+        private async Task<string> ResolvePlaceNameAsync(string placeId, CancellationToken cancellationToken)
+        {
+            var mainCacheKey = $"destinations_{placeId}";
+            if (_cache.TryGetValue(mainCacheKey, out PlaceCategoriesResponseDto cachedMain))
+                return cachedMain.Name;
+
+            var detailsUrl = $"{_settings.BaseUrl}/details/json?place_id={placeId}&fields=name&key={_settings.ApiKey}";
+            var detailsResponse = await _httpClient.GetAsync(detailsUrl, cancellationToken);
+            detailsResponse.EnsureSuccessStatusCode();
+            var placeDetails = await detailsResponse.Content.ReadFromJsonAsync<GooglePlacesApiResponse>(cancellationToken: cancellationToken);
+            return placeDetails?.Result?.Name;
         }
 
         private async Task<List<PlaceDto>> TextSearchPlaces(string query, CancellationToken cancellationToken)
@@ -134,29 +142,6 @@ namespace TheWanderLustWebAPI.Services
                     Url = $"{_settings.BaseUrl}/photo?maxwidth=800&photo_reference={p.PhotoReference}&key={_settings.ApiKey}"
                 }).ToList() ?? new List<PhotoDto>()
             }).ToList();
-        }
-
-        private PlaceCategoriesResponseDto MapToDto(GooglePlacesApiResponse apiResponse)
-        {
-            var result = apiResponse?.Result;
-            if (result == null)
-            {
-                return new PlaceCategoriesResponseDto();
-            }
-
-            return new PlaceCategoriesResponseDto
-            {
-                PlaceId = result.PlaceId,
-                Name = result.Name,
-                FormattedAddress = result.FormattedAddress,
-                Geometry = result.Geometry?.Location != null
-                    ? new GeometryDto
-                    {
-                        Latitude = result.Geometry.Location.Lat,
-                        Longitude = result.Geometry.Location.Lng
-                    }
-                    : null
-            };
         }
 
         public async Task<PlaceDetailsDto> GetPlaceDetails(string placeId, CancellationToken cancellationToken = default)

@@ -19,18 +19,20 @@ namespace TheWanderLustWebAPI.Controllers
             _cache = cache;
         }
 
-        [HttpGet("search")]
-        public async Task<IActionResult> Search([FromQuery] string placeId, CancellationToken cancellationToken)
+        [HttpGet("places")]
+        public async Task<IActionResult> GetByCategory([FromQuery] string placeId, [FromQuery] string category, CancellationToken cancellationToken)
         {
             if (string.IsNullOrWhiteSpace(placeId))
                 return BadRequest("placeId query parameter is required.");
+            if (string.IsNullOrWhiteSpace(category))
+                return BadRequest("category query parameter is required. Valid values: restaurants, stays, attractions, activities.");
 
             try
             {
-                var cacheKey = $"destinations_{placeId}";
+                var cacheKey = $"destinations_category_{placeId}_{category.ToLowerInvariant()}";
                 var fromCache = _cache.TryGetValue(cacheKey, out _);
 
-                var result = await _placesService.GetAllCategories(placeId, cancellationToken);
+                var result = await _placesService.SearchByCategory(placeId, category, cancellationToken);
 
                 Response.Headers["X-Data-Source"] = fromCache ? "cache" : "api";
                 return Ok(result);
