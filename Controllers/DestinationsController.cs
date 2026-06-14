@@ -75,36 +75,6 @@ namespace TheWanderLustWebAPI.Controllers
             }
         }
 
-        [HttpGet("hero-image")]
-        public async Task<IActionResult> HeroImage([FromQuery] string placeId, CancellationToken cancellationToken)
-        {
-            if (string.IsNullOrWhiteSpace(placeId))
-                return BadRequest("placeId query parameter is required.");
-
-            try
-            {
-                var cacheKey = $"pexels_hero_{placeId}";
-                var fromCache = _cache.TryGetValue(cacheKey, out _);
-
-                var imageUrls = await _pexelsService.GetHeroImagesAsync(placeId, cancellationToken);
-
-                Response.Headers["X-Data-Source"] = fromCache ? "cache" : "api";
-
-                if (imageUrls == null || imageUrls.Count == 0)
-                    return NotFound("No hero images found for this destination.");
-
-                return Ok(new { imageUrls });
-            }
-            catch (ArgumentException ex)
-            {
-                return BadRequest(ex.Message);
-            }
-            catch (HttpRequestException)
-            {
-                return StatusCode(502, "Failed to retrieve images from Pexels API.");
-            }
-        }
-
         [HttpGet("details")]
         public async Task<IActionResult> Details([FromQuery] string placeId, CancellationToken cancellationToken)
         {
