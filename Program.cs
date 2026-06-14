@@ -56,7 +56,7 @@ builder.Services.AddCors(options =>
     options.AddPolicy("AllowFrontend",
         policy =>
         {
-            policy.WithOrigins("http://localhost:4200", "https://thewanderlust-frontend.onrender.com")
+            policy.WithOrigins("http://localhost:4200", "https://thewanderlust-frontend.onrender.com","https://wayraa.com","https://www.wayraa.com")
                   .AllowAnyHeader()
                   .AllowAnyMethod();
         });
