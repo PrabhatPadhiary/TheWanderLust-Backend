@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using TheWanderLustWebAPI.Context;
@@ -11,9 +12,11 @@ using TheWanderLustWebAPI.Context;
 namespace TheWanderLustWebAPI.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260616104534_JournalsRelatedTable")]
+    partial class JournalsRelatedTable
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -160,89 +163,6 @@ namespace TheWanderLustWebAPI.Migrations
                     b.HasIndex("UserId");
 
                     b.ToTable("Journals");
-                });
-
-            modelBuilder.Entity("TheWanderLustWebAPI.Models.JournalComment", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("Body")
-                        .HasColumnType("text");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("JournalId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("UserId")
-                        .HasColumnType("uuid");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("JournalId");
-
-                    b.HasIndex("UserId");
-
-                    b.ToTable("JournalComments");
-                });
-
-            modelBuilder.Entity("TheWanderLustWebAPI.Models.JournalLike", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("JournalId")
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid>("UserId")
-                        .HasColumnType("uuid");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("UserId");
-
-                    b.HasIndex("JournalId", "UserId")
-                        .IsUnique();
-
-                    b.ToTable("JournalLikes");
-                });
-
-            modelBuilder.Entity("TheWanderLustWebAPI.Models.JournalPhoto", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("Caption")
-                        .HasColumnType("text");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid>("JournalId")
-                        .HasColumnType("uuid");
-
-                    b.Property<int>("Order")
-                        .HasColumnType("integer");
-
-                    b.Property<string>("Url")
-                        .HasColumnType("text");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("JournalId");
-
-                    b.ToTable("JournalPhotos");
                 });
 
             modelBuilder.Entity("TheWanderLustWebAPI.Models.JournalPlace", b =>
@@ -615,55 +535,6 @@ namespace TheWanderLustWebAPI.Migrations
                     b.Navigation("Trip");
 
                     b.Navigation("User");
-                });
-
-            modelBuilder.Entity("TheWanderLustWebAPI.Models.JournalComment", b =>
-                {
-                    b.HasOne("TheWanderLustWebAPI.Models.Journal", "Journal")
-                        .WithMany()
-                        .HasForeignKey("JournalId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("TheWanderLustWebAPI.Models.User", "User")
-                        .WithMany()
-                        .HasForeignKey("UserId")
-                        .OnDelete(DeleteBehavior.NoAction)
-                        .IsRequired();
-
-                    b.Navigation("Journal");
-
-                    b.Navigation("User");
-                });
-
-            modelBuilder.Entity("TheWanderLustWebAPI.Models.JournalLike", b =>
-                {
-                    b.HasOne("TheWanderLustWebAPI.Models.Journal", "Journal")
-                        .WithMany()
-                        .HasForeignKey("JournalId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.HasOne("TheWanderLustWebAPI.Models.User", "User")
-                        .WithMany()
-                        .HasForeignKey("UserId")
-                        .OnDelete(DeleteBehavior.NoAction)
-                        .IsRequired();
-
-                    b.Navigation("Journal");
-
-                    b.Navigation("User");
-                });
-
-            modelBuilder.Entity("TheWanderLustWebAPI.Models.JournalPhoto", b =>
-                {
-                    b.HasOne("TheWanderLustWebAPI.Models.Journal", "Journal")
-                        .WithMany()
-                        .HasForeignKey("JournalId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Journal");
                 });
 
             modelBuilder.Entity("TheWanderLustWebAPI.Models.JournalPlace", b =>

@@ -18,6 +18,11 @@ namespace TheWanderLustWebAPI.Context
         public DbSet<TripExpense> TripExpenses { get; set; }
         public DbSet<Invitation> Invitations { get; set; }
         public DbSet<TripChecklistItem> TripChecklistItems { get; set; }
+        public DbSet<Journal> Journals { get; set; }
+        public DbSet<JournalPlace> JournalPlaces { get; set; }
+        public DbSet<JournalPhoto> JournalPhotos { get; set; }
+        public DbSet<JournalLike> JournalLikes { get; set; }
+        public DbSet<JournalComment> JournalComments { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -125,6 +130,66 @@ namespace TheWanderLustWebAPI.Context
                 entity.HasOne(e => e.CreatedByUser)
                     .WithMany()
                     .HasForeignKey(e => e.CreatedByUserId)
+                    .OnDelete(DeleteBehavior.NoAction);
+            });
+
+            modelBuilder.Entity<Journal>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+                entity.Property(e => e.Budget).HasColumnType("decimal(18,2)");
+                entity.HasOne(e => e.User)
+                    .WithMany()
+                    .HasForeignKey(e => e.UserId)
+                    .OnDelete(DeleteBehavior.Cascade);
+                entity.HasOne(e => e.Trip)
+                    .WithMany()
+                    .HasForeignKey(e => e.TripId)
+                    .OnDelete(DeleteBehavior.SetNull)
+                    .IsRequired(false);
+            });
+
+            modelBuilder.Entity<JournalPlace>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+                entity.HasOne(e => e.Journal)
+                    .WithMany(j => j.Places)
+                    .HasForeignKey(e => e.JournalId)
+                    .OnDelete(DeleteBehavior.Cascade);
+            });
+
+            modelBuilder.Entity<JournalPhoto>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+                entity.HasOne(e => e.Journal)
+                    .WithMany()
+                    .HasForeignKey(e => e.JournalId)
+                    .OnDelete(DeleteBehavior.Cascade);
+            });
+
+            modelBuilder.Entity<JournalLike>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+                entity.HasIndex(e => new { e.JournalId, e.UserId }).IsUnique();
+                entity.HasOne(e => e.Journal)
+                    .WithMany()
+                    .HasForeignKey(e => e.JournalId)
+                    .OnDelete(DeleteBehavior.Cascade);
+                entity.HasOne(e => e.User)
+                    .WithMany()
+                    .HasForeignKey(e => e.UserId)
+                    .OnDelete(DeleteBehavior.NoAction);
+            });
+
+            modelBuilder.Entity<JournalComment>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+                entity.HasOne(e => e.Journal)
+                    .WithMany()
+                    .HasForeignKey(e => e.JournalId)
+                    .OnDelete(DeleteBehavior.Cascade);
+                entity.HasOne(e => e.User)
+                    .WithMany()
+                    .HasForeignKey(e => e.UserId)
                     .OnDelete(DeleteBehavior.NoAction);
             });
         }

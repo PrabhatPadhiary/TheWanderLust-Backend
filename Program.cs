@@ -50,6 +50,10 @@ builder.Services.Configure<PexelsSettings>(
     builder.Configuration.GetSection("Pexels"));
 builder.Services.AddHttpClient<IPexelsService, PexelsService>();
 
+builder.Services.Configure<CloudinarySettings>(
+    builder.Configuration.GetSection("Cloudinary"));
+builder.Services.AddSingleton<CloudinaryService>();
+
 builder.Services.AddControllers();
 builder.Services.AddCors(options =>
 {
