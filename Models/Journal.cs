@@ -15,6 +15,7 @@ namespace TheWanderLustWebAPI.Models
         public string? Currency { get; set; }
         public string Visibility { get; set; } = "private"; // "public" or "private"
         public string? ProTips { get; set; }
+        public string? Vibes { get; set; }  // comma-separated, e.g. "adventure,romantic,budget"
         public string Status { get; set; } = "draft"; // "draft" or "published"
         public int LikesCount { get; set; } = 0;
         public int CommentsCount { get; set; } = 0;
@@ -26,5 +27,6 @@ namespace TheWanderLustWebAPI.Models
         public User User { get; set; }
         public Trip? Trip { get; set; }
         public ICollection<JournalPlace> Places { get; set; } = new List<JournalPlace>();
+        public ICollection<JournalPhoto> Photos { get; set; } = new List<JournalPhoto>();
     }
 }

@@ -26,9 +26,21 @@ namespace TheWanderLustWebAPI.Controllers
         [HttpGet("feed")]
         public async Task<IActionResult> GetFeed()
         {
+            // Resolve current user if logged in — used for isLiked
+            var userId = await GetCurrentUserId();
+
+            // Fetch liked journal IDs for this user in one query
+            HashSet<Guid> likedIds = userId.HasValue
+                ? new HashSet<Guid>(await _dbContext.JournalLikes
+                    .Where(l => l.UserId == userId.Value)
+                    .Select(l => l.JournalId)
+                    .ToListAsync())
+                : new HashSet<Guid>();
+
             var journals = await _dbContext.Journals
                 .Include(j => j.User)
                 .Include(j => j.Places)
+                .Include(j => j.Photos)
                 .Where(j => j.Status == "published" && j.Visibility == "public")
                 .OrderByDescending(j => j.PublishedAt)
                 .Select(j => new
@@ -43,6 +55,7 @@ namespace TheWanderLustWebAPI.Controllers
                     j.Budget,
                     j.Currency,
                     j.ProTips,
+                    j.Vibes,
                     j.LikesCount,
                     j.CommentsCount,
                     j.PublishedAt,
@@ -55,19 +68,39 @@ namespace TheWanderLustWebAPI.Controllers
                         p.Category,
                         p.GooglePlaceId
                     }),
-                    Photos = _dbContext.JournalPhotos
-                        .Where(ph => ph.JournalId == j.Id)
-                        .OrderBy(ph => ph.Order)
-                        .Select(ph => new
-                        {
-                            ph.Id,
-                            ph.Url,
-                            ph.Order
-                        }).ToList()
+                    Photos = j.Photos.OrderBy(ph => ph.Order).Select(ph => new
+                    {
+                        ph.Id,
+                        ph.Url,
+                        ph.Order
+                    })
                 })
                 .ToListAsync();
 
-            return Ok(journals);
+            var result = journals.Select(j => new
+            {
+                j.Id,
+                j.Title,
+                j.Body,
+                j.Destination,
+                j.StartDate,
+                j.EndDate,
+                j.TravelersCount,
+                j.Budget,
+                j.Currency,
+                j.ProTips,
+                j.Vibes,
+                j.LikesCount,
+                j.CommentsCount,
+                j.PublishedAt,
+                j.CreatedAt,
+                j.Author,
+                j.Places,
+                j.Photos,
+                IsLiked = likedIds.Contains(j.Id)
+            });
+
+            return Ok(result);
         }
 
         /// <summary>
@@ -99,6 +132,7 @@ namespace TheWanderLustWebAPI.Controllers
                     j.Currency,
                     j.Visibility,
                     j.ProTips,
+                    j.Vibes,
                     j.Status,
                     j.LikesCount,
                     j.CommentsCount,
@@ -128,6 +162,7 @@ namespace TheWanderLustWebAPI.Controllers
             var journal = await _dbContext.Journals
                 .Include(j => j.User)
                 .Include(j => j.Places)
+                .Include(j => j.Photos)
                 .FirstOrDefaultAsync(j => j.Id == id);
 
             if (journal == null)
@@ -136,10 +171,30 @@ namespace TheWanderLustWebAPI.Controllers
             // If it's not public+published, only the author can view
             if (journal.Status != "published" || journal.Visibility != "public")
             {
-                var userId = await GetCurrentUserId();
-                if (userId == null || journal.UserId != userId.Value)
+                var requesterId = await GetCurrentUserId();
+                if (requesterId == null || journal.UserId != requesterId.Value)
                     return NotFound("Journal not found.");
             }
+
+            // Check if current user has liked this journal
+            var userId = await GetCurrentUserId();
+            var isLikedByMe = userId.HasValue && await _dbContext.JournalLikes
+                .AnyAsync(l => l.JournalId == id && l.UserId == userId.Value);
+
+            // Fetch comments with author info
+            var comments = await _dbContext.JournalComments
+                .Include(c => c.User)
+                .Where(c => c.JournalId == id)
+                .OrderBy(c => c.CreatedAt)
+                .Select(c => new
+                {
+                    c.Id,
+                    c.Body,
+                    c.CreatedAt,
+                    c.UpdatedAt,
+                    Author = new { c.User.Id, c.User.Name }
+                })
+                .ToListAsync();
 
             return Ok(new
             {
@@ -156,20 +211,28 @@ namespace TheWanderLustWebAPI.Controllers
                 journal.Currency,
                 journal.Visibility,
                 journal.ProTips,
+                Vibes = journal.Vibes != null
+                    ? journal.Vibes.Split(',', StringSplitOptions.RemoveEmptyEntries)
+                    : Array.Empty<string>(),
                 journal.Status,
                 journal.LikesCount,
                 journal.CommentsCount,
                 journal.CreatedAt,
                 journal.UpdatedAt,
                 journal.PublishedAt,
+                IsLikedByMe = isLikedByMe,
                 Author = new { journal.User.Id, journal.User.Name },
+                Photos = journal.Photos
+                    .OrderBy(p => p.Order)
+                    .Select(p => new { p.Id, p.Url, p.Caption, p.Order }),
                 Places = journal.Places.Select(p => new
                 {
                     p.Id,
                     p.PlaceName,
                     p.Category,
                     p.GooglePlaceId
-                })
+                }),
+                Comments = comments
             });
         }
 
@@ -218,6 +281,9 @@ namespace TheWanderLustWebAPI.Controllers
                 Currency = dto.Currency,
                 Visibility = visibility,
                 ProTips = dto.ProTips,
+                Vibes = dto.Vibes != null && dto.Vibes.Count > 0
+                    ? string.Join(",", dto.Vibes.Select(v => v.Trim().ToLower()))
+                    : null,
                 Status = status,
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow,
@@ -313,6 +379,11 @@ namespace TheWanderLustWebAPI.Controllers
             if (dto.ProTips != null)
                 journal.ProTips = dto.ProTips;
 
+            if (dto.Vibes != null)
+                journal.Vibes = dto.Vibes.Count > 0
+                    ? string.Join(",", dto.Vibes.Select(v => v.Trim().ToLower()))
+                    : null;
+
             if (!string.IsNullOrWhiteSpace(dto.Status))
             {
                 var newStatus = dto.Status.ToLower();
@@ -370,6 +441,7 @@ namespace TheWanderLustWebAPI.Controllers
                 journal.Currency,
                 journal.Visibility,
                 journal.ProTips,
+                journal.Vibes,
                 journal.Status,
                 journal.LikesCount,
                 journal.CommentsCount,
@@ -545,6 +617,214 @@ namespace TheWanderLustWebAPI.Controllers
 
             var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.FirebaseId == firebaseUid);
             return user?.Id;
+        }
+
+        // ─── Comments ────────────────────────────────────────────────────────────
+
+        /// <summary>
+        /// Get all comments for a journal. Public journals are accessible to all.
+        /// </summary>
+        [HttpGet("{id}/comments")]
+        public async Task<IActionResult> GetComments(Guid id)
+        {
+            var journal = await _dbContext.Journals.FirstOrDefaultAsync(j => j.Id == id);
+            if (journal == null)
+                return NotFound("Journal not found.");
+
+            if (journal.Status != "published" || journal.Visibility != "public")
+            {
+                var requesterId = await GetCurrentUserId();
+                if (requesterId == null || journal.UserId != requesterId.Value)
+                    return NotFound("Journal not found.");
+            }
+
+            var comments = await _dbContext.JournalComments
+                .Include(c => c.User)
+                .Where(c => c.JournalId == id)
+                .OrderBy(c => c.CreatedAt)
+                .Select(c => new
+                {
+                    c.Id,
+                    c.Body,
+                    c.CreatedAt,
+                    c.UpdatedAt,
+                    Author = new { c.User.Id, c.User.Name }
+                })
+                .ToListAsync();
+
+            return Ok(comments);
+        }
+
+        /// <summary>
+        /// Add a comment to a journal. Auth required.
+        /// </summary>
+        [HttpPost("{id}/comments")]
+        [Authorize]
+        public async Task<IActionResult> AddComment(Guid id, [FromBody] AddCommentDto dto)
+        {
+            if (string.IsNullOrWhiteSpace(dto?.Body))
+                return BadRequest("Comment body is required.");
+
+            var journal = await _dbContext.Journals.FirstOrDefaultAsync(j => j.Id == id);
+            if (journal == null || journal.Status != "published" || journal.Visibility != "public")
+                return NotFound("Journal not found.");
+
+            var userId = await GetCurrentUserId();
+            if (userId == null)
+                return Unauthorized();
+
+            var comment = new JournalComment
+            {
+                Id = Guid.NewGuid(),
+                JournalId = id,
+                UserId = userId.Value,
+                Body = dto.Body.Trim(),
+                CreatedAt = DateTime.UtcNow
+            };
+
+            _dbContext.JournalComments.Add(comment);
+            journal.CommentsCount++;
+            await _dbContext.SaveChangesAsync();
+
+            var user = await _dbContext.Users.FindAsync(userId.Value);
+
+            return Ok(new
+            {
+                comment.Id,
+                comment.Body,
+                comment.CreatedAt,
+                comment.UpdatedAt,
+                Author = new { user.Id, user.Name }
+            });
+        }
+
+        /// <summary>
+        /// Edit your own comment. Auth required.
+        /// </summary>
+        [HttpPut("{id}/comments/{commentId}")]
+        [Authorize]
+        public async Task<IActionResult> UpdateComment(Guid id, Guid commentId, [FromBody] AddCommentDto dto)
+        {
+            if (string.IsNullOrWhiteSpace(dto?.Body))
+                return BadRequest("Comment body is required.");
+
+            var userId = await GetCurrentUserId();
+            if (userId == null)
+                return Unauthorized();
+
+            var comment = await _dbContext.JournalComments
+                .FirstOrDefaultAsync(c => c.Id == commentId && c.JournalId == id && c.UserId == userId.Value);
+
+            if (comment == null)
+                return NotFound("Comment not found.");
+
+            comment.Body = dto.Body.Trim();
+            comment.UpdatedAt = DateTime.UtcNow;
+
+            await _dbContext.SaveChangesAsync();
+
+            return Ok(new
+            {
+                comment.Id,
+                comment.Body,
+                comment.CreatedAt,
+                comment.UpdatedAt
+            });
+        }
+
+        /// <summary>
+        /// Delete your own comment. Auth required.
+        /// </summary>
+        [HttpDelete("{id}/comments/{commentId}")]
+        [Authorize]
+        public async Task<IActionResult> DeleteComment(Guid id, Guid commentId)
+        {
+            var userId = await GetCurrentUserId();
+            if (userId == null)
+                return Unauthorized();
+
+            var comment = await _dbContext.JournalComments
+                .FirstOrDefaultAsync(c => c.Id == commentId && c.JournalId == id && c.UserId == userId.Value);
+
+            if (comment == null)
+                return NotFound("Comment not found.");
+
+            var journal = await _dbContext.Journals.FindAsync(id);
+            if (journal != null && journal.CommentsCount > 0)
+                journal.CommentsCount--;
+
+            _dbContext.JournalComments.Remove(comment);
+            await _dbContext.SaveChangesAsync();
+
+            return Ok(new { message = "Comment deleted." });
+        }
+
+        // ─── Likes ───────────────────────────────────────────────────────────────
+
+        /// <summary>
+        /// Toggle like on a journal. Returns liked: true/false. Auth required.
+        /// </summary>
+        [HttpPost("{id}/like")]
+        [Authorize]
+        public async Task<IActionResult> ToggleLike(Guid id)
+        {
+            var journal = await _dbContext.Journals.FirstOrDefaultAsync(j => j.Id == id);
+            if (journal == null || journal.Status != "published" || journal.Visibility != "public")
+                return NotFound("Journal not found.");
+
+            var userId = await GetCurrentUserId();
+            if (userId == null)
+                return Unauthorized();
+
+            var existing = await _dbContext.JournalLikes
+                .FirstOrDefaultAsync(l => l.JournalId == id && l.UserId == userId.Value);
+
+            if (existing != null)
+            {
+                // Unlike
+                _dbContext.JournalLikes.Remove(existing);
+                if (journal.LikesCount > 0)
+                    journal.LikesCount--;
+
+                await _dbContext.SaveChangesAsync();
+                return Ok(new { liked = false, likesCount = journal.LikesCount });
+            }
+            else
+            {
+                // Like
+                _dbContext.JournalLikes.Add(new JournalLike
+                {
+                    Id = Guid.NewGuid(),
+                    JournalId = id,
+                    UserId = userId.Value,
+                    CreatedAt = DateTime.UtcNow
+                });
+                journal.LikesCount++;
+
+                await _dbContext.SaveChangesAsync();
+                return Ok(new { liked = true, likesCount = journal.LikesCount });
+            }
+        }
+
+        /// <summary>
+        /// Check if the current user has liked a journal. Auth required.
+        /// </summary>
+        [HttpGet("{id}/like")]
+        [Authorize]
+        public async Task<IActionResult> GetLikeStatus(Guid id)
+        {
+            var journal = await _dbContext.Journals.FirstOrDefaultAsync(j => j.Id == id);
+            if (journal == null)
+                return NotFound("Journal not found.");
+
+            var userId = await GetCurrentUserId();
+            if (userId == null)
+                return Unauthorized();
+
+            var liked = await _dbContext.JournalLikes
+                .AnyAsync(l => l.JournalId == id && l.UserId == userId.Value);
+
+            return Ok(new { liked, likesCount = journal.LikesCount });
         }
     }
 }

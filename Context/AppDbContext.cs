@@ -161,7 +161,7 @@ namespace TheWanderLustWebAPI.Context
             {
                 entity.HasKey(e => e.Id);
                 entity.HasOne(e => e.Journal)
-                    .WithMany()
+                    .WithMany(j => j.Photos)
                     .HasForeignKey(e => e.JournalId)
                     .OnDelete(DeleteBehavior.Cascade);
             });

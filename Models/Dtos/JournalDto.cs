@@ -14,6 +14,7 @@ namespace TheWanderLustWebAPI.Models.Dtos
         public string Visibility { get; set; } = "private";
         public string? ProTips { get; set; }
         public string Status { get; set; } = "draft";
+        public List<string>? Vibes { get; set; }
         public List<CreateJournalPlaceDto>? Places { get; set; }
     }
 
@@ -31,6 +32,7 @@ namespace TheWanderLustWebAPI.Models.Dtos
         public string? Visibility { get; set; }
         public string? ProTips { get; set; }
         public string? Status { get; set; }
+        public List<string>? Vibes { get; set; }
         public List<CreateJournalPlaceDto>? Places { get; set; }
     }
 
@@ -39,5 +41,10 @@ namespace TheWanderLustWebAPI.Models.Dtos
         public string PlaceName { get; set; }
         public string Category { get; set; } = "other";
         public string? GooglePlaceId { get; set; }
+    }
+
+    public class AddCommentDto
+    {
+        public string Body { get; set; }
     }
 }
