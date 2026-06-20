@@ -66,7 +66,9 @@ namespace TheWanderLustWebAPI.Controllers
                         p.Id,
                         p.PlaceName,
                         p.Category,
-                        p.GooglePlaceId
+                        p.GooglePlaceId,
+                        p.Latitude,
+                        p.Longitude
                     }),
                     Photos = j.Photos.OrderBy(ph => ph.Order).Select(ph => new
                     {
@@ -144,7 +146,9 @@ namespace TheWanderLustWebAPI.Controllers
                         p.Id,
                         p.PlaceName,
                         p.Category,
-                        p.GooglePlaceId
+                        p.GooglePlaceId,
+                        p.Latitude,
+                        p.Longitude
                     })
                 })
                 .ToListAsync();
@@ -230,7 +234,9 @@ namespace TheWanderLustWebAPI.Controllers
                     p.Id,
                     p.PlaceName,
                     p.Category,
-                    p.GooglePlaceId
+                    p.GooglePlaceId,
+                    p.Latitude,
+                    p.Longitude
                 }),
                 Comments = comments
             });
@@ -306,7 +312,9 @@ namespace TheWanderLustWebAPI.Controllers
                         JournalId = journal.Id,
                         PlaceName = p.PlaceName,
                         Category = string.IsNullOrWhiteSpace(p.Category) ? "other" : p.Category.ToLower(),
-                        GooglePlaceId = p.GooglePlaceId
+                        GooglePlaceId = p.GooglePlaceId,
+                        Latitude = p.Latitude,
+                        Longitude = p.Longitude
                     });
                 }
             }
@@ -413,7 +421,9 @@ namespace TheWanderLustWebAPI.Controllers
                         JournalId = journal.Id,
                         PlaceName = p.PlaceName,
                         Category = string.IsNullOrWhiteSpace(p.Category) ? "other" : p.Category.ToLower(),
-                        GooglePlaceId = p.GooglePlaceId
+                        GooglePlaceId = p.GooglePlaceId,
+                        Latitude = p.Latitude,
+                        Longitude = p.Longitude
                     });
                 }
             }
@@ -424,7 +434,7 @@ namespace TheWanderLustWebAPI.Controllers
             // Reload places for response
             var updatedPlaces = await _dbContext.JournalPlaces
                 .Where(p => p.JournalId == journal.Id)
-                .Select(p => new { p.Id, p.PlaceName, p.Category, p.GooglePlaceId })
+                .Select(p => new { p.Id, p.PlaceName, p.Category, p.GooglePlaceId, p.Latitude, p.Longitude })
                 .ToListAsync();
 
             return Ok(new
