@@ -373,6 +373,79 @@ namespace TheWanderLustWebAPI.Controllers
             return Ok(new { message = "Destination removed from trip." });
         }
 
+        [HttpPut("{id}/destinations/dates")]
+        public async Task<IActionResult> UpdateDestinationDates(Guid id, [FromBody] List<UpdateDestinationDateDto> dtos)
+        {
+            if (dtos == null || dtos.Count == 0)
+                return BadRequest("At least one destination date update is required.");
+
+            var userId = await GetCurrentUserId();
+            if (userId == null)
+                return Unauthorized();
+
+            var role = await GetMemberRole(id, userId.Value);
+            if (role == null)
+                return NotFound("Trip not found.");
+            if (role != "owner" && role != "member")
+                return Forbid();
+
+            var trip = await _dbContext.Trips
+                .Include(t => t.Destinations)
+                .FirstOrDefaultAsync(t => t.Id == id);
+
+            if (trip == null)
+                return NotFound("Trip not found.");
+
+            // Validate all destination IDs belong to this trip
+            var tripDestinationIds = trip.Destinations.Select(d => d.Id).ToHashSet();
+            foreach (var dto in dtos)
+            {
+                if (!tripDestinationIds.Contains(dto.DestinationId))
+                    return BadRequest($"Destination {dto.DestinationId} does not belong to this trip.");
+            }
+
+            // Update each destination's dates
+            foreach (var dto in dtos)
+            {
+                var destination = trip.Destinations.First(d => d.Id == dto.DestinationId);
+                destination.StartDate = ToUtc(dto.StartDate);
+                destination.EndDate = ToUtc(dto.EndDate);
+            }
+
+            // Recalculate trip dates from all destinations
+            var allStartDates = trip.Destinations
+                .Where(d => d.StartDate.HasValue)
+                .Select(d => d.StartDate.Value)
+                .ToList();
+
+            var allEndDates = trip.Destinations
+                .Where(d => d.EndDate.HasValue)
+                .Select(d => d.EndDate.Value)
+                .ToList();
+
+            trip.StartDate = allStartDates.Count > 0 ? allStartDates.Min() : null;
+            trip.EndDate = allEndDates.Count > 0 ? allEndDates.Max() : null;
+            trip.UpdatedAt = DateTime.UtcNow;
+
+            await _dbContext.SaveChangesAsync();
+
+            return Ok(new
+            {
+                trip.Id,
+                trip.Name,
+                trip.StartDate,
+                trip.EndDate,
+                trip.Status,
+                Destinations = trip.Destinations.Select(d => new
+                {
+                    d.Id,
+                    d.Name,
+                    d.StartDate,
+                    d.EndDate
+                })
+            });
+        }
+
         [HttpPut("{id}/budget")]
         public async Task<IActionResult> SetBudget(Guid id, [FromBody] SetTripBudgetDto dto)
         {

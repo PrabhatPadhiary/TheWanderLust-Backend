@@ -32,4 +32,11 @@ namespace TheWanderLustWebAPI.Models.Dtos
         public decimal TotalBudget { get; set; }
         public string? Currency { get; set; }
     }
+
+    public class UpdateDestinationDateDto
+    {
+        public Guid DestinationId { get; set; }
+        public DateTime? StartDate { get; set; }
+        public DateTime? EndDate { get; set; }
+    }
 }

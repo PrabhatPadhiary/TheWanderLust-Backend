@@ -93,6 +93,53 @@ namespace TheWanderLustWebAPI.Migrations
                     b.ToTable("Invitations");
                 });
 
+            modelBuilder.Entity("TheWanderLustWebAPI.Models.ItineraryItem", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Category")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("DestinationId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("EndTime")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Notes")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("ScheduledDate")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("StartTime")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Title")
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("TripId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("TripPlaceId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DestinationId");
+
+                    b.HasIndex("TripId");
+
+                    b.HasIndex("TripPlaceId");
+
+                    b.ToTable("ItineraryItems");
+                });
+
             modelBuilder.Entity("TheWanderLustWebAPI.Models.Journal", b =>
                 {
                     b.Property<Guid>("Id")
@@ -606,6 +653,32 @@ namespace TheWanderLustWebAPI.Migrations
                     b.Navigation("Trip");
 
                     b.Navigation("UsedByUser");
+                });
+
+            modelBuilder.Entity("TheWanderLustWebAPI.Models.ItineraryItem", b =>
+                {
+                    b.HasOne("TheWanderLustWebAPI.Models.TripDestination", "Destination")
+                        .WithMany()
+                        .HasForeignKey("DestinationId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.HasOne("TheWanderLustWebAPI.Models.Trip", "Trip")
+                        .WithMany()
+                        .HasForeignKey("TripId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("TheWanderLustWebAPI.Models.TripPlace", "TripPlace")
+                        .WithMany()
+                        .HasForeignKey("TripPlaceId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("Destination");
+
+                    b.Navigation("Trip");
+
+                    b.Navigation("TripPlace");
                 });
 
             modelBuilder.Entity("TheWanderLustWebAPI.Models.Journal", b =>
