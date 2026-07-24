@@ -1,0 +1,58 @@
+@startuml Request Flow
+
+title TheWanderLust - Request Processing Flow
+
+start
+
+:Client sends HTTP request;
+
+if (Route requires [Authorize]?) then (yes)
+    :Extract Bearer token from header;
+    :FirebaseAuthHandler verifies token with Firebase;
+    if (Token valid?) then (yes)
+        :Set firebase_uid claim on HttpContext;
+    else (no)
+        :Return 401 Unauthorized;
+        stop
+    endif
+else (no)
+    :Continue without auth;
+endif
+
+:Route to Controller action;
+
+if (Action needs user identity?) then (yes)
+    :GetCurrentUserId() — lookup User by firebase_uid;
+    if (User found?) then (yes)
+        :Get userId;
+    else (no)
+        :Return 401 Unauthorized;
+        stop
+    endif
+else (no)
+endif
+
+if (Action is trip-scoped?) then (yes)
+    :GetMemberRole(tripId, userId);
+    if (User is a member?) then (yes)
+        :Check role against endpoint requirement;
+        if (Role allowed?) then (yes)
+            :Proceed;
+        else (no)
+            :Return 403 Forbid;
+            stop
+        endif
+    else (no)
+        :Return 404 Trip not found;
+        stop
+    endif
+else (no)
+endif
+
+:Execute business logic;
+:Interact with AppDbContext → PostgreSQL;
+:Return response (200/201/400/404/409);
+
+stop
+
+@enduml

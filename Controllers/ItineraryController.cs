@@ -224,6 +224,46 @@ namespace TheWanderLustWebAPI.Controllers
             return Ok(new { message = "Itinerary item deleted." });
         }
 
+        /// <summary>
+        /// Delete all itinerary items whose ScheduledDate falls outside the given date range.
+        /// Called by the frontend after destination dates are updated.
+        /// </summary>
+        [HttpDelete("outside-range")]
+        public async Task<IActionResult> DeleteOutsideRange(Guid tripId, [FromBody] DateRangeDto dto)
+        {
+            if (dto.StartDate == default || dto.EndDate == default)
+                return BadRequest("startDate and endDate are required.");
+
+            if (dto.EndDate < dto.StartDate)
+                return BadRequest("endDate must be after startDate.");
+
+            var userId = await GetCurrentUserId();
+            if (userId == null)
+                return Unauthorized();
+
+            var role = await GetMemberRole(tripId, userId.Value);
+            if (role == null)
+                return NotFound("Trip not found.");
+            if (role != "owner" && role != "member")
+                return Forbid();
+
+            var startDate = DateTime.SpecifyKind(dto.StartDate.Date, DateTimeKind.Utc);
+            var endDate = DateTime.SpecifyKind(dto.EndDate.Date, DateTimeKind.Utc);
+
+            var orphanedItems = await _dbContext.ItineraryItems
+                .Where(i => i.TripId == tripId
+                    && (i.ScheduledDate.Date < startDate || i.ScheduledDate.Date > endDate))
+                .ToListAsync();
+
+            if (orphanedItems.Count == 0)
+                return Ok(new { deleted = 0 });
+
+            _dbContext.ItineraryItems.RemoveRange(orphanedItems);
+            await _dbContext.SaveChangesAsync();
+
+            return Ok(new { deleted = orphanedItems.Count });
+        }
+
         private async Task<Guid?> GetCurrentUserId()
         {
             var firebaseUid = User.FindFirst("firebase_uid")?.Value;

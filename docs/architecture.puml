@@ -1,0 +1,88 @@
+@startuml TheWanderLust Backend Architecture
+
+skinparam style strictuml
+skinparam packageStyle rectangle
+skinparam defaultTextAlignment center
+
+title TheWanderLust Backend - System Architecture
+
+' External actors
+actor "Mobile/Web\nClient" as Client
+cloud "Firebase Auth" as Firebase
+cloud "Google Places\nAPI" as GoogleAPI
+cloud "Pexels API" as PexelsAPI
+cloud "Cloudinary" as Cloudinary
+
+' Application layers
+package "ASP.NET Core Web API" {
+
+    package "Authentication" {
+        [FirebaseAuthHandler] as AuthHandler
+    }
+
+    package "Controllers" {
+        [AuthController] as AuthCtrl
+        [TripsController] as TripsCtrl
+        [TripPlacesController] as PlacesCtrl
+        [TripExpensesController] as ExpensesCtrl
+        [TripMembersController] as MembersCtrl
+        [TripChecklistController] as ChecklistCtrl
+        [ItineraryController] as ItineraryCtrl
+        [InvitationsController] as InvitesCtrl
+        [DestinationsController] as DestCtrl
+        [FavouritesController] as FavCtrl
+        [JournalsController] as JournalsCtrl
+    }
+
+    package "Services" {
+        [GooglePlacesService] as GoogleSvc
+        [PexelsService] as PexelsSvc
+        [CloudinaryService] as CloudSvc
+    }
+
+    package "Data Layer" {
+        [AppDbContext] as DbCtx
+    }
+}
+
+database "PostgreSQL\n(Neon + PgBouncer)" as DB
+
+' Client to API
+Client --> AuthCtrl : POST /api/auth/login
+Client --> TripsCtrl : CRUD Trips
+Client --> PlacesCtrl : CRUD Trip Places
+Client --> ExpensesCtrl : CRUD Expenses
+Client --> MembersCtrl : Manage Members
+Client --> ChecklistCtrl : CRUD Checklist
+Client --> ItineraryCtrl : CRUD Itinerary
+Client --> InvitesCtrl : Create/Join Invites
+Client --> DestCtrl : Search Destinations
+Client --> FavCtrl : CRUD Favourites
+Client --> JournalsCtrl : CRUD Journals
+
+' Auth flow
+AuthCtrl --> Firebase : Verify ID Token
+AuthHandler --> Firebase : Validate JWT
+
+' Services to external APIs
+DestCtrl --> GoogleSvc
+GoogleSvc --> GoogleAPI : Text Search\nNearby Search\nPlace Details
+DestCtrl --> PexelsSvc
+PexelsSvc --> PexelsAPI : Hero Images
+JournalsCtrl --> CloudSvc
+CloudSvc --> Cloudinary : Upload Photos
+
+' Controllers to DB
+AuthCtrl --> DbCtx
+TripsCtrl --> DbCtx
+PlacesCtrl --> DbCtx
+ExpensesCtrl --> DbCtx
+MembersCtrl --> DbCtx
+ChecklistCtrl --> DbCtx
+ItineraryCtrl --> DbCtx
+InvitesCtrl --> DbCtx
+FavCtrl --> DbCtx
+JournalsCtrl --> DbCtx
+DbCtx --> DB
+
+@enduml

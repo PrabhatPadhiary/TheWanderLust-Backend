@@ -1,0 +1,219 @@
+@startuml TheWanderLust Data Model
+
+skinparam linetype ortho
+skinparam classAttributeIconSize 0
+
+title TheWanderLust - Entity Relationship Diagram
+
+entity "Users" as User {
+    *Id : GUID <<PK>>
+    --
+    FirebaseId : string <<unique>>
+    Email : string <<unique>>
+    Name : string
+    Role : string
+    IsActive : bool
+    CreatedAt : DateTime
+}
+
+entity "Trips" as Trip {
+    *Id : GUID <<PK>>
+    --
+    *UserId : GUID <<FK>>
+    Name : string
+    Description : string?
+    StartDate : DateTime?
+    EndDate : DateTime?
+    CoverPhotoUrl : string?
+    TravelersCount : int
+    PrimaryDestination : string?
+    TotalBudget : decimal?
+    Currency : string?
+    CreatedAt : DateTime
+    UpdatedAt : DateTime
+}
+
+entity "TripMembers" as TripMember {
+    *Id : GUID <<PK>>
+    --
+    *TripId : GUID <<FK>>
+    *UserId : GUID <<FK>>
+    Role : string (owner/member/viewer)
+    JoinedAt : DateTime
+}
+
+entity "Invitations" as Invite {
+    *Id : GUID <<PK>>
+    --
+    *TripId : GUID <<FK>>
+    Role : string
+    ExpiresAt : DateTime
+    UsedBy : GUID? <<FK>>
+    CreatedAt : DateTime
+}
+
+entity "TripDestinations" as TripDest {
+    *Id : GUID <<PK>>
+    --
+    *TripId : GUID <<FK>>
+    GooglePlaceId : string
+    Name : string
+    Latitude : double?
+    Longitude : double?
+    PhotoUrl : string?
+    Order : int
+    StartDate : DateTime?
+    EndDate : DateTime?
+    CreatedAt : DateTime
+}
+
+entity "TripPlaces" as TripPlace {
+    *Id : GUID <<PK>>
+    --
+    *TripDestinationId : GUID <<FK>>
+    PlaceId : string
+    PlaceName : string
+    Category : string
+    Latitude : double?
+    Longitude : double?
+    Notes : string?
+    CreatedAt : DateTime
+}
+
+entity "TripExpenses" as Expense {
+    *Id : GUID <<PK>>
+    --
+    *TripId : GUID <<FK>>
+    Title : string
+    Amount : decimal
+    Category : enum
+    Date : DateTime
+    PaidByMemberId : string
+    PaidByName : string
+    Notes : string?
+    CreatedAt : DateTime
+}
+
+entity "TripChecklistItems" as Checklist {
+    *Id : GUID <<PK>>
+    --
+    *TripId : GUID <<FK>>
+    Title : string
+    Category : string
+    DueDate : DateTime?
+    AssignedToUserId : GUID?
+    IsCompleted : bool
+    CompletedAt : DateTime?
+    CompletedByUserId : GUID?
+    CreatedByUserId : GUID
+    Order : int
+    CreatedAt : DateTime
+}
+
+entity "ItineraryItems" as Itinerary {
+    *Id : GUID <<PK>>
+    --
+    *TripId : GUID <<FK>>
+    *DestinationId : GUID <<FK>>
+    TripPlaceId : GUID? <<FK>>
+    Title : string
+    Category : string
+    ScheduledDate : DateTime
+    StartTime : string?
+    EndTime : string?
+    Notes : string?
+    CreatedAt : DateTime
+}
+
+entity "Favourites" as Fav {
+    *Id : GUID <<PK>>
+    --
+    *UserId : GUID <<FK>>
+    PlaceId : string
+    PlaceName : string
+    Category : string?
+    CreatedAt : DateTime
+}
+
+entity "Journals" as Journal {
+    *Id : GUID <<PK>>
+    --
+    *UserId : GUID <<FK>>
+    TripId : GUID? <<FK>>
+    Title : string
+    Body : text
+    Destination : string
+    Visibility : string
+    Status : string
+    LikesCount : int
+    CommentsCount : int
+    PublishedAt : DateTime?
+    CreatedAt : DateTime
+    UpdatedAt : DateTime
+}
+
+entity "JournalPlaces" as JPlace {
+    *Id : GUID <<PK>>
+    --
+    *JournalId : GUID <<FK>>
+    PlaceName : string
+    Category : string
+    GooglePlaceId : string?
+    Latitude : double?
+    Longitude : double?
+}
+
+entity "JournalPhotos" as JPhoto {
+    *Id : GUID <<PK>>
+    --
+    *JournalId : GUID <<FK>>
+    Url : string
+    Caption : string?
+    Order : int
+    CreatedAt : DateTime
+}
+
+entity "JournalLikes" as JLike {
+    *Id : GUID <<PK>>
+    --
+    *JournalId : GUID <<FK>>
+    *UserId : GUID <<FK>>
+    CreatedAt : DateTime
+}
+
+entity "JournalComments" as JComment {
+    *Id : GUID <<PK>>
+    --
+    *JournalId : GUID <<FK>>
+    *UserId : GUID <<FK>>
+    Body : text
+    CreatedAt : DateTime
+    UpdatedAt : DateTime?
+}
+
+' Relationships
+User ||--o{ Trip : creates
+User ||--o{ TripMember : belongs to
+User ||--o{ Fav : has
+User ||--o{ Journal : writes
+User ||--o{ JLike : likes
+User ||--o{ JComment : comments
+
+Trip ||--o{ TripMember : has members
+Trip ||--o{ TripDest : has destinations
+Trip ||--o{ Expense : has expenses
+Trip ||--o{ Checklist : has checklist
+Trip ||--o{ Itinerary : has itinerary
+Trip ||--o{ Invite : has invitations
+
+TripDest ||--o{ TripPlace : has places
+TripDest ||--o{ Itinerary : scheduled in
+
+TripPlace |o--o{ Itinerary : linked to
+
+Journal ||--o{ JPlace : has places
+Journal ||--o{ JPhoto : has photos
+Journal ||--o{ JLike : has likes
+Journal ||--o{ JComment : has comments
+
+@enduml
