@@ -52,13 +52,22 @@ namespace TheWanderLustWebAPI.Controllers
 
                 var data = await response.Content.ReadFromJsonAsync<GoogleAutocompleteResponse>(cancellationToken: cancellationToken);
 
-                var results = data?.Predictions?.Select(p => new
+                object results;
+                var predictions = data?.Predictions;
+                if (predictions != null)
                 {
-                    placeId = p.PlaceId,
-                    name = p.StructuredFormatting?.MainText ?? p.Description,
-                    description = p.Description,
-                    secondary = p.StructuredFormatting?.SecondaryText ?? ""
-                }).ToList() ?? new List<object>();
+                    results = predictions.Select(p => new
+                    {
+                        placeId = p.PlaceId,
+                        name = p.StructuredFormatting?.MainText ?? p.Description,
+                        description = p.Description,
+                        secondary = p.StructuredFormatting?.SecondaryText ?? ""
+                    }).ToList();
+                }
+                else
+                {
+                    results = new List<object>();
+                }
 
                 _cache.Set(cacheKey, results, TimeSpan.FromHours(1));
 
