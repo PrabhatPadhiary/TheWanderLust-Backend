@@ -60,7 +60,7 @@ builder.Services.AddCors(options =>
     options.AddPolicy("AllowFrontend",
         policy =>
         {
-            policy.WithOrigins("http://localhost:4200", "http://localhost:8081", "https://thewanderlust-frontend.onrender.com","https://wayraa.com","https://www.wayraa.com")
+            policy.WithOrigins("http://localhost:4200", "http://localhost:8081", "http://192.168.1.2:8081", "exp://192.168.1.2:8081", "https://thewanderlust-frontend.onrender.com","https://wayraa.com","https://www.wayraa.com")
                   .AllowAnyHeader()
                   .AllowAnyMethod();
         });
@@ -74,7 +74,14 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-app.UseHttpsRedirection();
+// Skip HTTPS redirection in Development so the mobile app (Expo Go on a phone)
+// can reach the API over plain http://<LAN-IP>:5273 without being bounced to a
+// self-signed HTTPS endpoint it can't validate.
+if (!app.Environment.IsDevelopment())
+{
+    app.UseHttpsRedirection();
+}
+
 app.UseCors("AllowFrontend");
 
 app.UseAuthentication();
