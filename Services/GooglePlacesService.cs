@@ -101,10 +101,52 @@ namespace TheWanderLustWebAPI.Services
             return placeDetails?.Result?.Name;
         }
 
-        private async Task<List<PlaceDto>> TextSearchPlaces(string query, CancellationToken cancellationToken)
+        // Supported home-screen themes. Queries are intentionally broad so Text
+        // Search returns inspirational destinations rather than single POIs.
+        private static readonly Dictionary<string, string> ThemeQueryMap = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["beaches"]    = "best beach destinations",
+            ["mountains"]  = "best mountain destinations",
+            ["cities"]     = "best cities to visit",
+            ["historical"] = "best historical places to visit",
+            ["islands"]    = "best island destinations",
+            ["wildlife"]   = "best wildlife and safari destinations",
+        };
+
+        public async Task<List<PlaceDto>> SearchByTheme(string theme, double? lat = null, double? lng = null, CancellationToken cancellationToken = default)
+        {
+            if (!ThemeQueryMap.TryGetValue(theme?.Trim() ?? "", out var query))
+                throw new ArgumentException($"Invalid theme '{theme}'. Valid values: {string.Join(", ", ThemeQueryMap.Keys)}.");
+
+            var hasBias = lat.HasValue && lng.HasValue && !(lat == 0 && lng == 0);
+            // Separate cache entries for global vs. location-biased results.
+            var cacheKey = hasBias
+                ? $"destinations_theme_{theme.ToLowerInvariant()}_{lat:F1}_{lng:F1}"
+                : $"destinations_theme_{theme.ToLowerInvariant()}_global";
+            if (_cache.TryGetValue(cacheKey, out List<PlaceDto> cached))
+                return cached;
+
+            var results = await TextSearchPlaces(query, cancellationToken, hasBias ? lat : null, hasBias ? lng : null);
+
+            _cache.Set(cacheKey, results, CacheDuration);
+            return results;
+        }
+
+        private async Task<List<PlaceDto>> TextSearchPlaces(string query, CancellationToken cancellationToken, double? lat = null, double? lng = null)
         {
             var encodedQuery = Uri.EscapeDataString(query);
             var url = $"{_settings.BaseUrl}/textsearch/json?query={encodedQuery}&language=en&key={_settings.ApiKey}";
+
+            // Optional location bias: Text Search still returns strong results
+            // beyond the radius, so this nudges toward the user's region without
+            // producing an empty list the way strict Nearby Search would.
+            if (lat.HasValue && lng.HasValue)
+            {
+                var latStr = lat.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                var lngStr = lng.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                url += $"&location={latStr},{lngStr}&radius=50000";
+            }
+
             var response = await _httpClient.GetAsync(url, cancellationToken);
             response.EnsureSuccessStatusCode();
 

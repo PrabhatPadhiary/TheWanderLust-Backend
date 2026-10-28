@@ -193,6 +193,41 @@ namespace TheWanderLustWebAPI.Controllers
             }
         }
 
+        /// <summary>
+        /// Get themed destinations for a home-screen category (beaches, mountains,
+        /// cities, historical, islands, wildlife). When lat/lng are supplied the
+        /// results are biased toward the user's region ("Nearby"); otherwise the
+        /// results are global.
+        /// </summary>
+        [HttpGet("by-category")]
+        public async Task<IActionResult> ByCategory([FromQuery] string theme, [FromQuery] double? lat, [FromQuery] double? lng, CancellationToken cancellationToken)
+        {
+            if (string.IsNullOrWhiteSpace(theme))
+                return BadRequest("theme query parameter is required.");
+
+            try
+            {
+                var biased = lat.HasValue && lng.HasValue && !(lat == 0 && lng == 0);
+                var cacheKey = biased
+                    ? $"destinations_theme_{theme.ToLowerInvariant()}_{lat:F1}_{lng:F1}"
+                    : $"destinations_theme_{theme.ToLowerInvariant()}_global";
+                var fromCache = _cache.TryGetValue(cacheKey, out _);
+
+                var result = await _placesService.SearchByTheme(theme, lat, lng, cancellationToken);
+
+                Response.Headers["X-Data-Source"] = fromCache ? "cache" : "api";
+                return Ok(result);
+            }
+            catch (ArgumentException ex)
+            {
+                return BadRequest(ex.Message);
+            }
+            catch (HttpRequestException)
+            {
+                return StatusCode(502, "Failed to retrieve data from Google Places API.");
+            }
+        }
+
         [HttpGet("filter")]
         public async Task<IActionResult> Filter([FromQuery] string placeId, [FromQuery] string filter, CancellationToken cancellationToken)
         {

@@ -6,6 +6,7 @@ namespace TheWanderLustWebAPI.Services
     {
         Task<List<PlaceDto>> SearchByFilter(string placeId, string filter, CancellationToken cancellationToken = default);
         Task<List<PlaceDto>> SearchByCategory(string placeId, string category, CancellationToken cancellationToken = default);
+        Task<List<PlaceDto>> SearchByTheme(string theme, double? lat = null, double? lng = null, CancellationToken cancellationToken = default);
         Task<PlaceDetailsDto> GetPlaceDetails(string placeId, CancellationToken cancellationToken = default);
     }
 }
