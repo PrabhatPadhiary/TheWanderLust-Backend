@@ -45,6 +45,9 @@ builder.Services.Configure<GooglePlacesSettings>(
     builder.Configuration.GetSection("GooglePlaces"));
 builder.Services.AddMemoryCache();
 builder.Services.AddHttpClient<IGooglePlacesService, GooglePlacesService>();
+// Place id -> main photo, with its own size-limited cache (see PlacePhotoService).
+builder.Services.AddHttpClient(nameof(PlacePhotoService));
+builder.Services.AddSingleton<PlacePhotoService>();
 
 builder.Services.Configure<PexelsSettings>(
     builder.Configuration.GetSection("Pexels"));

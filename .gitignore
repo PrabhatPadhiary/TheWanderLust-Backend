@@ -23,3 +23,7 @@ secrets.json
 
 # Firebase service account key
 wanderlust-35cd9-firebase-adminsdk-*.json
+
+# macOS Finder metadata
+.DS_Store
+**/.DS_Store

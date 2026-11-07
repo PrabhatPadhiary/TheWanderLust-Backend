@@ -14,6 +14,7 @@ namespace TheWanderLustWebAPI.Controllers
         private readonly IGooglePlacesService _placesService;
         private readonly IPexelsService _pexelsService;
         private readonly IMemoryCache _cache;
+        private readonly PlacePhotoService _placePhotos;
         private readonly HttpClient _httpClient;
         private readonly string _apiKey;
 
@@ -21,12 +22,14 @@ namespace TheWanderLustWebAPI.Controllers
             IGooglePlacesService placesService,
             IPexelsService pexelsService,
             IMemoryCache cache,
+            PlacePhotoService placePhotos,
             IHttpClientFactory httpClientFactory,
             IOptions<GooglePlacesSettings> placesSettings)
         {
             _placesService = placesService;
             _pexelsService = pexelsService;
             _cache = cache;
+            _placePhotos = placePhotos;
             _httpClient = httpClientFactory.CreateClient();
             _apiKey = placesSettings.Value.ApiKey;
         }
@@ -137,6 +140,41 @@ namespace TheWanderLustWebAPI.Controllers
             catch (HttpRequestException)
             {
                 return StatusCode(502, "Failed to retrieve nearby places from Google Places API.");
+            }
+        }
+
+        /// <summary>
+        /// Get a place's main photo straight from its Google place id, so the
+        /// client needs no details lookup first. Cached on the server and sent
+        /// with Cache-Control so the phone can keep it too.
+        /// 404 when the place has no photo; 502 when Google can't be reached.
+        /// </summary>
+        [HttpGet("place-photo")]
+        public async Task<IActionResult> PlacePhoto(
+            [FromQuery] string placeId,
+            [FromQuery] int maxWidth = 800,
+            CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(placeId) || placeId.Length > 512)
+                return BadRequest("placeId query parameter is required.");
+
+            try
+            {
+                var photo = await _placePhotos.GetPhotoAsync(placeId.Trim(), maxWidth, cancellationToken);
+                if (photo == null)
+                {
+                    Response.Headers.CacheControl = "no-store";
+                    return NotFound();
+                }
+
+                // Matches the server cache lifetime (see PlacePhotoService).
+                Response.Headers.CacheControl = "public, max-age=86400";
+                return File(photo.Bytes, photo.ContentType);
+            }
+            catch (HttpRequestException)
+            {
+                Response.Headers.CacheControl = "no-store";
+                return StatusCode(502, "Failed to retrieve photo from Google Places API.");
             }
         }
 

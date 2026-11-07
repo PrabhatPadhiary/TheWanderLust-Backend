@@ -29,6 +29,8 @@ namespace TheWanderLustWebAPI.Controllers
             var trips = await _dbContext.Trips
                 .Include(t => t.Destinations)
                     .ThenInclude(d => d.Places)
+                .Include(t => t.Members)
+                    .ThenInclude(m => m.User)
                 .Where(t => t.UserId == userId.Value
                     || t.Members.Any(m => m.UserId == userId.Value))
                 .OrderByDescending(t => t.StartDate)
@@ -48,9 +50,31 @@ namespace TheWanderLustWebAPI.Controllers
                 t.Currency,
                 t.Status,
                 t.CreatedAt,
+                // Google place id of the trip's first destination, so clients can
+                // load its photo directly from /Destinations/place-photo.
+                PrimaryPlaceId = t.Destinations
+                    .OrderBy(d => d.Order)
+                    .ThenBy(d => d.CreatedAt)
+                    .Select(d => d.GooglePlaceId)
+                    .FirstOrDefault(),
                 PlaceIds = t.Destinations
                     .SelectMany(d => d.Places)
                     .Select(p => p.PlaceId)
+                    .ToList(),
+                // Small member summary for list cards (avatars): the total, plus
+                // the first few names with the owner first. Full member details
+                // stay on GET /api/Trips/{id}.
+                MemberCount = t.Members.Count,
+                // The signed-in user's role on this trip (owner | member | viewer),
+                // so clients can hide edit actions the server would reject.
+                MyRole = t.Members.Where(m => m.UserId == userId.Value)
+                    .Select(m => m.Role).FirstOrDefault()
+                    ?? (t.UserId == userId.Value ? "owner" : null),
+                Members = t.Members
+                    .OrderByDescending(m => m.Role == "owner")
+                    .ThenBy(m => m.JoinedAt)
+                    .Take(3)
+                    .Select(m => new { m.UserId, Name = m.User?.Name })
                     .ToList()
             });
 
@@ -120,6 +144,9 @@ namespace TheWanderLustWebAPI.Controllers
                 trip.Currency,
                 trip.Status,
                 trip.CreatedAt,
+                MyRole = trip.Members.Where(m => m.UserId == userId.Value)
+                    .Select(m => m.Role).FirstOrDefault()
+                    ?? (trip.UserId == userId.Value ? "owner" : null),
                 Destinations = trip.Destinations.Select(d => new
                 {
                     d.Id,
