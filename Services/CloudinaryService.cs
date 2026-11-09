@@ -34,5 +34,16 @@ public class CloudinaryService
 
         return uploadResult.SecureUrl.ToString();
     }
+
+    /// <summary>
+    /// Delete every image under a folder (e.g. "journals/{id}") and the folder
+    /// itself. Used when an account is deleted.
+    /// </summary>
+    public async Task DeleteFolderAsync(string folder)
+    {
+        var prefix = folder.TrimEnd('/') + "/";
+        await _cloudinary.DeleteResourcesByPrefixAsync(prefix);
+        await _cloudinary.DeleteFolderAsync(folder.TrimEnd('/'));
+    }
 }
 
