@@ -12,7 +12,6 @@ namespace TheWanderLustWebAPI.Controllers
     public class DestinationsController : ControllerBase
     {
         private readonly IGooglePlacesService _placesService;
-        private readonly IPexelsService _pexelsService;
         private readonly IMemoryCache _cache;
         private readonly PlacePhotoService _placePhotos;
         private readonly HttpClient _httpClient;
@@ -20,14 +19,12 @@ namespace TheWanderLustWebAPI.Controllers
 
         public DestinationsController(
             IGooglePlacesService placesService,
-            IPexelsService pexelsService,
             IMemoryCache cache,
             PlacePhotoService placePhotos,
             IHttpClientFactory httpClientFactory,
             IOptions<GooglePlacesSettings> placesSettings)
         {
             _placesService = placesService;
-            _pexelsService = pexelsService;
             _cache = cache;
             _placePhotos = placePhotos;
             _httpClient = httpClientFactory.CreateClient();

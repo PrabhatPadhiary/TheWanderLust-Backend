@@ -49,10 +49,6 @@ builder.Services.AddHttpClient<IGooglePlacesService, GooglePlacesService>();
 builder.Services.AddHttpClient(nameof(PlacePhotoService));
 builder.Services.AddSingleton<PlacePhotoService>();
 
-builder.Services.Configure<PexelsSettings>(
-    builder.Configuration.GetSection("Pexels"));
-builder.Services.AddHttpClient<IPexelsService, PexelsService>();
-
 builder.Services.Configure<CloudinarySettings>(
     builder.Configuration.GetSection("Cloudinary"));
 builder.Services.AddSingleton<CloudinaryService>();
