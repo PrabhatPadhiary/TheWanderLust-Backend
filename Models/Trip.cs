@@ -11,6 +11,9 @@ namespace TheWanderLustWebAPI.Models
         public string? CoverPhotoUrl { get; set; }
         public int TravelersCount { get; set; }
         public string? PrimaryDestination { get; set; }
+        // The trip's primary stop (its name and cover photo), chosen separately
+        // from the route order. Null on older trips: then the first stop is primary.
+        public Guid? PrimaryDestinationId { get; set; }
         public decimal? TotalBudget { get; set; }
         public string? Currency { get; set; }
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;

@@ -34,4 +34,12 @@ namespace TheWanderLustWebAPI.Models.Dtos
     {
         public string Url { get; set; }
     }
+
+    /// <summary>One page of places from a paged destination search.</summary>
+    public class PagedPlacesDto
+    {
+        public List<PlaceDto> Places { get; set; } = new();
+        public int Page { get; set; }
+        public bool HasMore { get; set; }
+    }
 }

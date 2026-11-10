@@ -60,7 +60,7 @@ namespace TheWanderLustWebAPI.Controllers
                     j.CommentsCount,
                     j.PublishedAt,
                     j.CreatedAt,
-                    Author = new { j.User.Id, j.User.Name },
+                    Author = new { j.User.Id, j.User.Name, j.User.PhotoUrl },
                     Places = j.Places.Select(p => new
                     {
                         p.Id,
@@ -103,6 +103,68 @@ namespace TheWanderLustWebAPI.Controllers
             });
 
             return Ok(result);
+        }
+
+        /// <summary>
+        /// Public, published journals that tag a place (by Google place id),
+        /// newest first: "Stories from Wayraa travellers" on a place's page.
+        /// Same shape as the feed. No auth required (isLiked when signed in).
+        /// </summary>
+        [HttpGet("by-place/{googlePlaceId}")]
+        public async Task<IActionResult> GetByPlace(string googlePlaceId, [FromQuery] int? limit)
+        {
+            if (string.IsNullOrWhiteSpace(googlePlaceId))
+                return BadRequest("Place id is required.");
+
+            var take = Math.Clamp(limit ?? 10, 1, 30);
+            var userId = await GetCurrentUserId();
+            HashSet<Guid> likedIds = userId.HasValue
+                ? new HashSet<Guid>(await _dbContext.JournalLikes
+                    .Where(l => l.UserId == userId.Value)
+                    .Select(l => l.JournalId)
+                    .ToListAsync())
+                : new HashSet<Guid>();
+
+            var journals = await _dbContext.Journals
+                .Where(j => j.Status == "published" && j.Visibility == "public"
+                    && j.Places.Any(p => p.GooglePlaceId == googlePlaceId))
+                .OrderByDescending(j => j.PublishedAt)
+                .Take(take)
+                .Select(j => new
+                {
+                    j.Id,
+                    j.Title,
+                    j.Body,
+                    j.Destination,
+                    j.StartDate,
+                    j.EndDate,
+                    j.Vibes,
+                    j.LikesCount,
+                    j.CommentsCount,
+                    j.PublishedAt,
+                    j.CreatedAt,
+                    Author = new { j.User.Id, j.User.Name, j.User.PhotoUrl },
+                    Photos = j.Photos.OrderBy(ph => ph.Order).Select(ph => new { ph.Id, ph.Url, ph.Order })
+                })
+                .ToListAsync();
+
+            return Ok(journals.Select(j => new
+            {
+                j.Id,
+                j.Title,
+                j.Body,
+                j.Destination,
+                j.StartDate,
+                j.EndDate,
+                j.Vibes,
+                j.LikesCount,
+                j.CommentsCount,
+                j.PublishedAt,
+                j.CreatedAt,
+                j.Author,
+                j.Photos,
+                IsLiked = likedIds.Contains(j.Id)
+            }));
         }
 
         /// <summary>
@@ -196,7 +258,7 @@ namespace TheWanderLustWebAPI.Controllers
                     c.Body,
                     c.CreatedAt,
                     c.UpdatedAt,
-                    Author = new { c.User.Id, c.User.Name }
+                    Author = new { c.User.Id, c.User.Name, c.User.PhotoUrl }
                 })
                 .ToListAsync();
 
@@ -225,7 +287,7 @@ namespace TheWanderLustWebAPI.Controllers
                 journal.UpdatedAt,
                 journal.PublishedAt,
                 IsLikedByMe = isLikedByMe,
-                Author = new { journal.User.Id, journal.User.Name },
+                Author = new { journal.User.Id, journal.User.Name, journal.User.PhotoUrl },
                 Photos = journal.Photos
                     .OrderBy(p => p.Order)
                     .Select(p => new { p.Id, p.Url, p.Caption, p.Order }),
@@ -658,7 +720,7 @@ namespace TheWanderLustWebAPI.Controllers
                     c.Body,
                     c.CreatedAt,
                     c.UpdatedAt,
-                    Author = new { c.User.Id, c.User.Name }
+                    Author = new { c.User.Id, c.User.Name, c.User.PhotoUrl }
                 })
                 .ToListAsync();
 
@@ -704,7 +766,7 @@ namespace TheWanderLustWebAPI.Controllers
                 comment.Body,
                 comment.CreatedAt,
                 comment.UpdatedAt,
-                Author = new { user.Id, user.Name }
+                Author = new { user.Id, user.Name, user.PhotoUrl }
             });
         }
 

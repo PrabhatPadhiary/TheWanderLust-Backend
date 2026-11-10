@@ -27,6 +27,10 @@ namespace TheWanderLustWebAPI.Services
 
         [JsonPropertyName("results")]
         public List<GoogleTextSearchResult> Results { get; set; }
+
+        // Set when Google has another page (20 more) for the same query.
+        [JsonPropertyName("next_page_token")]
+        public string NextPageToken { get; set; }
     }
 
     internal class GoogleTextSearchResult

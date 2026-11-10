@@ -37,19 +37,42 @@ namespace TheWanderLustWebAPI.Controllers
         /// <summary>
         /// Autocomplete search for destinations. Proxies Google Places Autocomplete API.
         /// </summary>
+        /// <summary>
+        /// Place autocomplete. By default only regions (cities, areas, countries);
+        /// scope=all also returns specific places such as restaurants, hotels and
+        /// landmarks (used when tagging places in a journal). Each result carries
+        /// Google's place types so clients can tell a city from a business.
+        /// lat + lng (+ radius in metres, default 50 km) keep results inside that
+        /// circle, e.g. only places in the journal's destination city.
+        /// </summary>
         [HttpGet("search")]
-        public async Task<IActionResult> Search([FromQuery] string query, CancellationToken cancellationToken)
+        public async Task<IActionResult> Search(
+            [FromQuery] string query,
+            [FromQuery] string? scope,
+            [FromQuery] double? lat,
+            [FromQuery] double? lng,
+            [FromQuery] int? radius,
+            CancellationToken cancellationToken)
         {
             if (string.IsNullOrWhiteSpace(query) || query.Length < 2)
                 return BadRequest("Query must be at least 2 characters.");
 
-            var cacheKey = $"autocomplete_{query.ToLowerInvariant().Trim()}";
+            var allPlaces = string.Equals(scope, "all", StringComparison.OrdinalIgnoreCase);
+            var near = lat.HasValue && lng.HasValue
+                && lat.Value is >= -90 and <= 90 && lng.Value is >= -180 and <= 180;
+            var radiusMetres = Math.Clamp(radius ?? 50000, 1000, 500000);
+            var nearKey = near ? $"_{lat!.Value:F3},{lng!.Value:F3},{radiusMetres}" : "";
+            var cacheKey = $"autocomplete_{(allPlaces ? "all" : "regions")}{nearKey}_{query.ToLowerInvariant().Trim()}";
             if (_cache.TryGetValue(cacheKey, out object cachedResult))
                 return Ok(cachedResult);
 
             try
             {
-                var url = $"https://maps.googleapis.com/maps/api/place/autocomplete/json?input={Uri.EscapeDataString(query)}&types=(regions)&key={_apiKey}";
+                var typesFilter = allPlaces ? "" : "&types=(regions)";
+                var areaFilter = near
+                    ? FormattableString.Invariant($"&location={lat!.Value},{lng!.Value}&radius={radiusMetres}&strictbounds=true")
+                    : "";
+                var url = $"https://maps.googleapis.com/maps/api/place/autocomplete/json?input={Uri.EscapeDataString(query)}{typesFilter}{areaFilter}&key={_apiKey}";
                 var response = await _httpClient.GetAsync(url, cancellationToken);
                 response.EnsureSuccessStatusCode();
 
@@ -64,7 +87,8 @@ namespace TheWanderLustWebAPI.Controllers
                         placeId = p.PlaceId,
                         name = p.StructuredFormatting?.MainText ?? p.Description,
                         description = p.Description,
-                        secondary = p.StructuredFormatting?.SecondaryText ?? ""
+                        secondary = p.StructuredFormatting?.SecondaryText ?? "",
+                        types = p.Types ?? new List<string>()
                     }).ToList();
                 }
                 else
@@ -266,6 +290,41 @@ namespace TheWanderLustWebAPI.Controllers
             }
         }
 
+        /// <summary>
+        /// Paged places inside a destination, for "See all" and "Search in X".
+        /// Give one of: query (free text, e.g. "biryani"), filter (e.g. "Cafes")
+        /// or category (restaurants | stays | attractions | activities).
+        /// page 0, 1 or 2 (20 a page from Google, up to 60 in all).
+        /// </summary>
+        [HttpGet("places/search")]
+        public async Task<IActionResult> SearchInDestination(
+            [FromQuery] string placeId,
+            [FromQuery] string? category,
+            [FromQuery] string? filter,
+            [FromQuery] string? query,
+            [FromQuery] int page,
+            CancellationToken cancellationToken)
+        {
+            if (string.IsNullOrWhiteSpace(placeId))
+                return BadRequest("placeId query parameter is required.");
+            if (!string.IsNullOrWhiteSpace(query) && query.Trim().Length < 2)
+                return BadRequest("Query must be at least 2 characters.");
+
+            try
+            {
+                var result = await _placesService.SearchInDestination(placeId, category, filter, query, page, cancellationToken);
+                return Ok(result);
+            }
+            catch (ArgumentException ex)
+            {
+                return BadRequest(ex.Message);
+            }
+            catch (HttpRequestException)
+            {
+                return StatusCode(502, "Failed to retrieve places from Google Places API.");
+            }
+        }
+
         [HttpGet("filter")]
         public async Task<IActionResult> Filter([FromQuery] string placeId, [FromQuery] string filter, CancellationToken cancellationToken)
         {
@@ -341,6 +400,9 @@ namespace TheWanderLustWebAPI.Controllers
 
         [JsonPropertyName("structured_formatting")]
         public StructuredFormatting StructuredFormatting { get; set; }
+
+        [JsonPropertyName("types")]
+        public List<string>? Types { get; set; }
     }
 
     public class StructuredFormatting

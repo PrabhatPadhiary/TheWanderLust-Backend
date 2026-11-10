@@ -12,7 +12,15 @@ namespace TheWanderLustWebAPI.Controllers
     [Authorize]
     public class ItineraryController : ControllerBase
     {
+        private static readonly string[] ValidSlots = { "morning", "afternoon", "evening", "anytime" };
         private readonly AppDbContext _dbContext;
+
+        /// <summary>Normalised slot, null for none; false if it isn't a valid slot.</summary>
+        private static bool TryParseSlot(string? value, out string? slot)
+        {
+            slot = string.IsNullOrWhiteSpace(value) ? null : value.Trim().ToLowerInvariant();
+            return slot == null || ValidSlots.Contains(slot);
+        }
 
         public ItineraryController(AppDbContext dbContext)
         {
@@ -36,6 +44,7 @@ namespace TheWanderLustWebAPI.Controllers
             var items = await _dbContext.ItineraryItems
                 .Where(i => i.TripId == tripId)
                 .OrderBy(i => i.ScheduledDate)
+                .ThenBy(i => i.SortOrder)
                 .ThenBy(i => i.StartTime)
                 .Select(i => new
                 {
@@ -49,6 +58,8 @@ namespace TheWanderLustWebAPI.Controllers
                     i.StartTime,
                     i.EndTime,
                     i.Notes,
+                    i.Slot,
+                    i.SortOrder,
                     i.CreatedAt
                 })
                 .ToListAsync();
@@ -80,6 +91,9 @@ namespace TheWanderLustWebAPI.Controllers
             if (role != "owner" && role != "member")
                 return Forbid();
 
+            if (!TryParseSlot(dto.Slot, out var slot))
+                return BadRequest("Slot must be one of: morning, afternoon, evening, anytime.");
+
             // Verify destination belongs to this trip
             var destinationExists = await _dbContext.TripDestinations
                 .AnyAsync(d => d.Id == dto.DestinationId && d.TripId == tripId);
@@ -98,6 +112,8 @@ namespace TheWanderLustWebAPI.Controllers
                 StartTime = dto.StartTime,
                 EndTime = dto.EndTime,
                 Notes = dto.Notes,
+                Slot = slot,
+                SortOrder = dto.SortOrder ?? 0,
                 CreatedAt = DateTime.UtcNow
             };
 
@@ -116,6 +132,8 @@ namespace TheWanderLustWebAPI.Controllers
                 item.StartTime,
                 item.EndTime,
                 item.Notes,
+                item.Slot,
+                item.SortOrder,
                 item.CreatedAt
             });
         }
@@ -178,6 +196,16 @@ namespace TheWanderLustWebAPI.Controllers
             if (dto.Notes != null)
                 item.Notes = dto.Notes;
 
+            if (dto.Slot != null)
+            {
+                if (!TryParseSlot(dto.Slot, out var slot))
+                    return BadRequest("Slot must be one of: morning, afternoon, evening, anytime.");
+                item.Slot = slot;
+            }
+
+            if (dto.SortOrder.HasValue)
+                item.SortOrder = dto.SortOrder.Value;
+
             await _dbContext.SaveChangesAsync();
 
             return Ok(new
@@ -192,8 +220,74 @@ namespace TheWanderLustWebAPI.Controllers
                 item.StartTime,
                 item.EndTime,
                 item.Notes,
+                item.Slot,
+                item.SortOrder,
                 item.CreatedAt
             });
+        }
+
+        /// <summary>
+        /// Save a drag-and-drop in one go: each item's day, part of day and
+        /// order. Only items of this trip are touched. Owner and members.
+        /// </summary>
+        [HttpPut("arrange")]
+        public async Task<IActionResult> Arrange(Guid tripId, [FromBody] List<ArrangeItineraryItemDto> dtos)
+        {
+            if (dtos == null || dtos.Count == 0)
+                return BadRequest("Nothing to arrange.");
+            if (dtos.Count > 200)
+                return BadRequest("Too many items at once.");
+
+            var userId = await GetCurrentUserId();
+            if (userId == null)
+                return Unauthorized();
+
+            var role = await GetMemberRole(tripId, userId.Value);
+            if (role == null)
+                return NotFound("Trip not found.");
+            if (role != "owner" && role != "member")
+                return Forbid();
+
+            var ids = dtos.Select(d => d.Id).ToList();
+            var items = await _dbContext.ItineraryItems
+                .Where(i => i.TripId == tripId && ids.Contains(i.Id))
+                .ToDictionaryAsync(i => i.Id);
+
+            foreach (var dto in dtos)
+            {
+                if (!items.TryGetValue(dto.Id, out var item))
+                    continue; // deleted meanwhile (e.g. by another traveller)
+                if (!TryParseSlot(dto.Slot, out var slot))
+                    return BadRequest("Slot must be one of: morning, afternoon, evening, anytime.");
+                if (dto.ScheduledDate != default)
+                    item.ScheduledDate = DateTime.SpecifyKind(dto.ScheduledDate, DateTimeKind.Utc);
+                item.Slot = slot;
+                item.SortOrder = dto.SortOrder;
+                if (dto.ClearTime)
+                {
+                    item.StartTime = null;
+                    item.EndTime = null;
+                }
+            }
+
+            await _dbContext.SaveChangesAsync();
+
+            return Ok(items.Values.Select(item => new
+            {
+                item.Id,
+                item.TripId,
+                item.DestinationId,
+                item.TripPlaceId,
+                item.Title,
+                item.Category,
+                item.ScheduledDate,
+                item.StartTime,
+                item.EndTime,
+                item.Notes,
+                item.Slot,
+                item.SortOrder,
+                item.CreatedAt
+            }));
         }
 
         /// <summary>

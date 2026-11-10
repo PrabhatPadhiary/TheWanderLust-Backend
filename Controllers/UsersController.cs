@@ -67,6 +67,7 @@ namespace TheWanderLustWebAPI.Controllers
                 user.Id,
                 user.Name,
                 user.Email,
+                user.PhotoUrl,
                 user.CreatedAt,
                 Stats = new
                 {
@@ -106,10 +107,86 @@ namespace TheWanderLustWebAPI.Controllers
                 user.FirebaseId,
                 user.Name,
                 user.Email,
+                user.PhotoUrl,
                 user.Role,
                 user.CreatedAt,
                 user.IsActive
             });
+        }
+
+        private const long MaxPhotoBytes = 10 * 1024 * 1024;
+        private static readonly string[] PhotoTypes = { "image/jpeg", "image/png", "image/webp", "image/heic", "image/heif" };
+
+        /// <summary>
+        /// Set the profile photo (one image, multipart field "file"). Replaces
+        /// the previous one; shown on journals and shared trips.
+        /// </summary>
+        [HttpPost("me/photo")]
+        [RequestSizeLimit(MaxPhotoBytes + 1024 * 1024)]
+        public async Task<IActionResult> UploadPhoto([FromForm] IFormFile file)
+        {
+            var user = await GetCurrentUser();
+            if (user == null)
+                return Unauthorized();
+
+            if (file == null || file.Length == 0)
+                return BadRequest("Choose a photo to upload.");
+            if (file.Length > MaxPhotoBytes)
+                return BadRequest("That photo is too large (10 MB max).");
+            if (!string.IsNullOrEmpty(file.ContentType)
+                && file.ContentType != "application/octet-stream"
+                && !PhotoTypes.Contains(file.ContentType.ToLowerInvariant()))
+                return BadRequest("Profile photos must be JPEG, PNG, WebP or HEIC images.");
+
+            // One photo per user: clear the folder, then upload the new one.
+            var folder = $"users/{user.Id}";
+            try
+            {
+                await _cloudinaryService.DeleteFolderAsync(folder);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Could not clear old profile photo for user {UserId}.", user.Id);
+            }
+
+            string url;
+            try
+            {
+                url = await _cloudinaryService.UploadImageAsync(file, folder);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Profile photo upload failed for user {UserId}.", user.Id);
+                return StatusCode(502, "Couldn't upload the photo. Please try again.");
+            }
+
+            user.PhotoUrl = url;
+            await _dbContext.SaveChangesAsync();
+            return Ok(new { user.PhotoUrl });
+        }
+
+        /// <summary>Remove the profile photo (back to initials).</summary>
+        [HttpDelete("me/photo")]
+        public async Task<IActionResult> DeletePhoto()
+        {
+            var user = await GetCurrentUser();
+            if (user == null)
+                return Unauthorized();
+
+            if (user.PhotoUrl != null)
+            {
+                user.PhotoUrl = null;
+                await _dbContext.SaveChangesAsync();
+                try
+                {
+                    await _cloudinaryService.DeleteFolderAsync($"users/{user.Id}");
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Could not delete profile photo for user {UserId}.", user.Id);
+                }
+            }
+            return Ok(new { PhotoUrl = (string?)null });
         }
 
         /// <summary>
@@ -219,6 +296,15 @@ namespace TheWanderLustWebAPI.Controllers
             {
                 firebaseDeleted = false;
                 _logger.LogError(ex, "Account {UserId} deleted, but removing Firebase user {FirebaseUid} failed.", userId, firebaseUid);
+            }
+
+            try
+            {
+                await _cloudinaryService.DeleteFolderAsync($"users/{userId}");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Could not delete Cloudinary profile photo for user {UserId}.", userId);
             }
 
             foreach (var journalId in journalIds)

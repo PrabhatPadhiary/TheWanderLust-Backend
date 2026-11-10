@@ -12,6 +12,11 @@ namespace TheWanderLustWebAPI.Models
         public string? StartTime { get; set; } // "09:00"
         public string? EndTime { get; set; } // "11:00"
         public string? Notes { get; set; }
+        /// <summary>Part of the day: "morning", "afternoon", "evening" or
+        /// "anytime". Null on older items (the app derives it from StartTime).</summary>
+        public string? Slot { get; set; }
+        /// <summary>Order within the day's slot (lowest first).</summary>
+        public int SortOrder { get; set; }
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
         // Navigation properties

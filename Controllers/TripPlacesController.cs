@@ -128,10 +128,17 @@ namespace TheWanderLustWebAPI.Controllers
             if (role != "owner" && role != "member")
                 return Forbid();
 
+            // The place's itinerary entries go with it (otherwise the FK's
+            // SET NULL would leave them behind as unlinked items).
+            var itineraryItems = await _dbContext.ItineraryItems
+                .Where(i => i.TripPlaceId == place.Id)
+                .ToListAsync();
+            _dbContext.ItineraryItems.RemoveRange(itineraryItems);
+
             _dbContext.TripPlaces.Remove(place);
             await _dbContext.SaveChangesAsync();
 
-            return Ok(new { message = "Place removed from trip." });
+            return Ok(new { message = "Place removed from trip.", removedItineraryItems = itineraryItems.Count });
         }
 
         private async Task<Guid?> GetCurrentUserId()

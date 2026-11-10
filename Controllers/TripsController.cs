@@ -52,11 +52,10 @@ namespace TheWanderLustWebAPI.Controllers
                 t.CreatedAt,
                 // Google place id of the trip's first destination, so clients can
                 // load its photo directly from /Destinations/place-photo.
-                PrimaryPlaceId = t.Destinations
-                    .OrderBy(d => d.Order)
-                    .ThenBy(d => d.CreatedAt)
-                    .Select(d => d.GooglePlaceId)
-                    .FirstOrDefault(),
+                // The primary stop (else the first stop, on older trips).
+                PrimaryPlaceId = t.PrimaryDestinationId != null
+                    ? t.Destinations.Where(d => d.Id == t.PrimaryDestinationId).Select(d => d.GooglePlaceId).FirstOrDefault()
+                    : t.Destinations.OrderBy(d => d.Order).ThenBy(d => d.CreatedAt).Select(d => d.GooglePlaceId).FirstOrDefault(),
                 PlaceIds = t.Destinations
                     .SelectMany(d => d.Places)
                     .Select(p => p.PlaceId)
@@ -74,7 +73,7 @@ namespace TheWanderLustWebAPI.Controllers
                     .OrderByDescending(m => m.Role == "owner")
                     .ThenBy(m => m.JoinedAt)
                     .Take(3)
-                    .Select(m => new { m.UserId, Name = m.User?.Name })
+                    .Select(m => new { m.UserId, Name = m.User?.Name, PhotoUrl = m.User?.PhotoUrl })
                     .ToList()
             });
 
@@ -144,6 +143,7 @@ namespace TheWanderLustWebAPI.Controllers
                 trip.Currency,
                 trip.Status,
                 trip.CreatedAt,
+                PrimaryDestinationId = EffectivePrimaryId(trip),
                 MyRole = trip.Members.Where(m => m.UserId == userId.Value)
                     .Select(m => m.Role).FirstOrDefault()
                     ?? (trip.UserId == userId.Value ? "owner" : null),
@@ -179,6 +179,7 @@ namespace TheWanderLustWebAPI.Controllers
                     m.UserId,
                     Name = m.User.Name,
                     Email = m.User.Email,
+                    PhotoUrl = m.User.PhotoUrl,
                     m.Role,
                     m.JoinedAt
                 })
@@ -252,6 +253,7 @@ namespace TheWanderLustWebAPI.Controllers
                     CreatedAt = DateTime.UtcNow
                 };
                 _dbContext.TripDestinations.Add(destination);
+                trip.PrimaryDestinationId = destination.Id;
             }
 
             await _dbContext.SaveChangesAsync();
@@ -372,6 +374,16 @@ namespace TheWanderLustWebAPI.Controllers
             _dbContext.TripDestinations.Add(destination);
             await _dbContext.SaveChangesAsync();
 
+            // Keep the trip's dates in step with its stops.
+            var trip = await _dbContext.Trips.Include(t => t.Destinations).FirstOrDefaultAsync(t => t.Id == id);
+            if (trip != null)
+            {
+                var datesChanged = RecalculateTripDates(trip, keepWhenUndated: true);
+                var orderChanged = OrderStopsByDate(trip);
+                if (datesChanged || orderChanged)
+                    await _dbContext.SaveChangesAsync();
+            }
+
             return Ok(new { destination.Id, destination.GooglePlaceId, destination.Name, destination.Latitude, destination.Longitude });
         }
 
@@ -388,16 +400,31 @@ namespace TheWanderLustWebAPI.Controllers
             if (role != "owner" && role != "member")
                 return Forbid();
 
-            var destination = await _dbContext.TripDestinations
-                .FirstOrDefaultAsync(d => d.Id == destinationId && d.TripId == id);
+            var trip = await _dbContext.Trips
+                .Include(t => t.Destinations)
+                .FirstOrDefaultAsync(t => t.Id == id);
+            var destination = trip?.Destinations.FirstOrDefault(d => d.Id == destinationId);
 
             if (destination == null)
                 return NotFound("Destination not found.");
+            if (destination.Id == EffectivePrimaryId(trip))
+                return BadRequest("This is the trip's primary destination. Make another stop primary first.");
+
+            // The stop's itinerary entries go with it (the FK is NO ACTION, so
+            // leaving them would block the delete).
+            var itineraryItems = await _dbContext.ItineraryItems
+                .Where(i => i.DestinationId == destination.Id)
+                .ToListAsync();
+            _dbContext.ItineraryItems.RemoveRange(itineraryItems);
 
             _dbContext.TripDestinations.Remove(destination);
+            trip.Destinations.Remove(destination);
+            // Without this the trip kept the removed stop's dates (e.g. still
+            // starting on the 6th after that stop was gone).
+            RecalculateTripDates(trip, keepWhenUndated: true);
             await _dbContext.SaveChangesAsync();
 
-            return Ok(new { message = "Destination removed from trip." });
+            return Ok(new { message = "Destination removed from trip.", trip.StartDate, trip.EndDate });
         }
 
         [HttpPut("{id}/destinations/dates")]
@@ -439,19 +466,10 @@ namespace TheWanderLustWebAPI.Controllers
                 destination.EndDate = ToUtc(dto.EndDate);
             }
 
-            // Recalculate trip dates from all destinations
-            var allStartDates = trip.Destinations
-                .Where(d => d.StartDate.HasValue)
-                .Select(d => d.StartDate.Value)
-                .ToList();
-
-            var allEndDates = trip.Destinations
-                .Where(d => d.EndDate.HasValue)
-                .Select(d => d.EndDate.Value)
-                .ToList();
-
-            trip.StartDate = allStartDates.Count > 0 ? allStartDates.Min() : null;
-            trip.EndDate = allEndDates.Count > 0 ? allEndDates.Max() : null;
+            // Recalculate trip dates from all destinations, and keep the stops
+            // in date order (the primary destination stays the same).
+            RecalculateTripDates(trip, keepWhenUndated: false);
+            OrderStopsByDate(trip);
             trip.UpdatedAt = DateTime.UtcNow;
 
             await _dbContext.SaveChangesAsync();
@@ -471,6 +489,143 @@ namespace TheWanderLustWebAPI.Controllers
                     d.EndDate
                 })
             });
+        }
+
+        /// <summary>
+        /// Put a trip's stops in a new order: the body lists every stop id, first
+        /// to last. The primary destination does not change.
+        /// </summary>
+        [HttpPut("{id}/destinations/order")]
+        public async Task<IActionResult> ReorderDestinations(Guid id, [FromBody] List<Guid> destinationIds)
+        {
+            if (destinationIds == null || destinationIds.Count == 0)
+                return BadRequest("Give the stops in their new order.");
+
+            var userId = await GetCurrentUserId();
+            if (userId == null)
+                return Unauthorized();
+
+            var role = await GetMemberRole(id, userId.Value);
+            if (role == null)
+                return NotFound("Trip not found.");
+            if (role != "owner" && role != "member")
+                return Forbid();
+
+            var trip = await _dbContext.Trips
+                .Include(t => t.Destinations)
+                .FirstOrDefaultAsync(t => t.Id == id);
+            if (trip == null)
+                return NotFound("Trip not found.");
+
+            var current = trip.Destinations.Select(d => d.Id).ToHashSet();
+            if (destinationIds.Count != current.Count || !destinationIds.All(current.Contains) || destinationIds.Distinct().Count() != current.Count)
+                return BadRequest("The new order must list each of the trip's stops exactly once.");
+
+            trip.PrimaryDestinationId ??= EffectivePrimaryId(trip); // pin it before the order changes
+            for (var i = 0; i < destinationIds.Count; i++)
+                trip.Destinations.First(d => d.Id == destinationIds[i]).Order = i;
+            trip.UpdatedAt = DateTime.UtcNow;
+
+            await _dbContext.SaveChangesAsync();
+            return Ok(new
+            {
+                trip.Id,
+                trip.PrimaryDestination,
+                Destinations = trip.Destinations.OrderBy(d => d.Order).Select(d => new { d.Id, d.Name, d.Order, d.StartDate, d.EndDate })
+            });
+        }
+
+        /// <summary>
+        /// Make a stop the trip's primary destination: its name on cards, its
+        /// cover photo. The route order does not change.
+        /// </summary>
+        [HttpPut("{id}/primary-destination")]
+        public async Task<IActionResult> SetPrimaryDestination(Guid id, [FromBody] SetPrimaryDestinationDto dto)
+        {
+            var userId = await GetCurrentUserId();
+            if (userId == null)
+                return Unauthorized();
+
+            var role = await GetMemberRole(id, userId.Value);
+            if (role == null)
+                return NotFound("Trip not found.");
+            if (role != "owner" && role != "member")
+                return Forbid();
+
+            var trip = await _dbContext.Trips
+                .Include(t => t.Destinations)
+                .FirstOrDefaultAsync(t => t.Id == id);
+            var stop = trip?.Destinations.FirstOrDefault(d => d.Id == dto?.DestinationId);
+            if (stop == null)
+                return NotFound("Destination not found.");
+
+            trip.PrimaryDestinationId = stop.Id;
+            trip.PrimaryDestination = stop.Name;
+            if (!string.IsNullOrEmpty(stop.PhotoUrl))
+                trip.CoverPhotoUrl = stop.PhotoUrl;
+            trip.UpdatedAt = DateTime.UtcNow;
+            await _dbContext.SaveChangesAsync();
+
+            return Ok(new { trip.Id, PrimaryDestinationId = stop.Id, trip.PrimaryDestination });
+        }
+
+        /// <summary>The primary stop's id: the chosen one, else the first stop.</summary>
+        private static Guid? EffectivePrimaryId(Trip trip) =>
+            trip.PrimaryDestinationId
+            ?? trip.Destinations.OrderBy(d => d.Order).ThenBy(d => d.CreatedAt).Select(d => (Guid?)d.Id).FirstOrDefault();
+
+        /// <summary>
+        /// Keep stops in date order: dated stops by start date, undated ones
+        /// after them in their current order. Pins the primary destination first
+        /// (older trips take it from the order), so reordering never changes it.
+        /// Returns true when the order changed.
+        /// </summary>
+        private static bool OrderStopsByDate(Trip trip)
+        {
+            if (trip.Destinations.Count < 2)
+                return false;
+            trip.PrimaryDestinationId ??= EffectivePrimaryId(trip);
+
+            var sorted = trip.Destinations
+                .OrderBy(d => d.StartDate.HasValue ? 0 : 1)
+                .ThenBy(d => d.StartDate)
+                .ThenBy(d => d.Order)
+                .ThenBy(d => d.CreatedAt)
+                .ToList();
+            var changed = false;
+            for (var i = 0; i < sorted.Count; i++)
+            {
+                if (sorted[i].Order != i)
+                {
+                    sorted[i].Order = i;
+                    changed = true;
+                }
+            }
+            return changed;
+        }
+
+        /// <summary>
+        /// A trip's dates follow its stops: earliest stop start to latest stop
+        /// end. With no dated stop, keepWhenUndated leaves the trip's own dates
+        /// alone (trips created with dates on the trip only); otherwise they are
+        /// cleared. Returns true when the dates changed.
+        /// </summary>
+        private static bool RecalculateTripDates(Trip trip, bool keepWhenUndated)
+        {
+            var starts = trip.Destinations.Where(d => d.StartDate.HasValue).Select(d => d.StartDate!.Value).ToList();
+            var ends = trip.Destinations.Where(d => d.EndDate.HasValue).Select(d => d.EndDate!.Value).ToList();
+            if (starts.Count == 0 && ends.Count == 0 && keepWhenUndated)
+                return false;
+
+            DateTime? newStart = starts.Count > 0 ? starts.Min() : null;
+            DateTime? newEnd = ends.Count > 0 ? ends.Max() : null;
+            if (newStart == trip.StartDate && newEnd == trip.EndDate)
+                return false;
+
+            trip.StartDate = newStart;
+            trip.EndDate = newEnd;
+            trip.UpdatedAt = DateTime.UtcNow;
+            return true;
         }
 
         [HttpPut("{id}/budget")]
@@ -548,5 +703,10 @@ namespace TheWanderLustWebAPI.Controllers
 
         private static DateTime? ToUtc(DateTime? dt) =>
             dt.HasValue ? DateTime.SpecifyKind(dt.Value, DateTimeKind.Utc) : null;
+    }
+
+    public class SetPrimaryDestinationDto
+    {
+        public Guid DestinationId { get; set; }
     }
 }

@@ -154,6 +154,7 @@ namespace TheWanderLustWebAPI.Services
             return MapTextSearchResults(content);
         }
 
+        // Curated lists (the destination page preview): well-known places only.
         private List<PlaceDto> MapTextSearchResults(GoogleTextSearchResponse response)
         {
             if (response?.Results == null)
@@ -161,29 +162,130 @@ namespace TheWanderLustWebAPI.Services
 
             return response.Results
                 .Where(r => r.Rating >= 4.0 && r.UserRatingsTotal >= 500)
-                .OrderByDescending(r => (r.Rating ?? 0) * Math.Log10((r.UserRatingsTotal ?? 0) + 1))
+                .OrderByDescending(PlaceScore)
                 .Take(8)
-                .Select(r => new PlaceDto
-            {
-                PlaceId = r.PlaceId,
-                Name = r.Name,
-                Vicinity = r.FormattedAddress,
-                Rating = r.Rating,
-                UserRatingsTotal = r.UserRatingsTotal,
-                PriceLevel = r.PriceLevel,
-                Types = r.Types ?? new List<string>(),
-                Geometry = r.Geometry?.Location != null
-                    ? new GeometryDto
-                    {
-                        Latitude = r.Geometry.Location.Lat,
-                        Longitude = r.Geometry.Location.Lng
-                    }
-                    : null,
-                Photos = r.Photos?.Take(1).Select(p => new PhotoDto
+                .Select(ToPlaceDto)
+                .ToList();
+        }
+
+        // Rating weighted by how many people rated it.
+        private static double PlaceScore(GoogleTextSearchResult r) =>
+            (r.Rating ?? 0) * Math.Log10((r.UserRatingsTotal ?? 0) + 1);
+
+        private PlaceDto ToPlaceDto(GoogleTextSearchResult r) => new PlaceDto
+        {
+            PlaceId = r.PlaceId,
+            Name = r.Name,
+            Vicinity = r.FormattedAddress,
+            Rating = r.Rating,
+            UserRatingsTotal = r.UserRatingsTotal,
+            PriceLevel = r.PriceLevel,
+            Types = r.Types ?? new List<string>(),
+            Geometry = r.Geometry?.Location != null
+                ? new GeometryDto
                 {
-                    Url = $"{_settings.BaseUrl}/photo?maxwidth=800&photo_reference={p.PhotoReference}&key={_settings.ApiKey}"
-                }).ToList() ?? new List<PhotoDto>()
-            }).ToList();
+                    Latitude = r.Geometry.Location.Lat,
+                    Longitude = r.Geometry.Location.Lng
+                }
+                : null,
+            Photos = r.Photos?.Take(1).Select(p => new PhotoDto
+            {
+                Url = $"{_settings.BaseUrl}/photo?maxwidth=800&photo_reference={p.PhotoReference}&key={_settings.ApiKey}"
+            }).ToList() ?? new List<PhotoDto>()
+        };
+
+        // ── Paged search inside a destination ("See all", "Search in X") ──
+        // Google Text Search returns 20 results a page and at most 3 pages (60).
+        // Each page is cached for the usual duration; the token for the next
+        // page is short-lived (Google expires them), so it is kept briefly and
+        // re-fetched from the previous page when missing.
+        private const int MaxPages = 3;
+        private static readonly TimeSpan PageTokenLifetime = TimeSpan.FromMinutes(2);
+
+        public async Task<PagedPlacesDto> SearchInDestination(
+            string placeId, string? category, string? filter, string? query, int page,
+            CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(placeId))
+                throw new ArgumentException("Place ID cannot be null or empty.", nameof(placeId));
+            page = Math.Clamp(page, 0, MaxPages - 1);
+
+            var placeName = await ResolvePlaceNameAsync(placeId, cancellationToken);
+            if (string.IsNullOrWhiteSpace(placeName))
+                return new PagedPlacesDto { Page = page };
+
+            string text;
+            if (!string.IsNullOrWhiteSpace(query))
+                text = $"{query.Trim()} in {placeName}";
+            else if (!string.IsNullOrWhiteSpace(filter))
+                text = $"top {filter.Trim()} in {placeName}";
+            else if (CategoryQueryMap.TryGetValue(category?.Trim() ?? "", out var template))
+                text = string.Format(template, placeName);
+            else
+                throw new ArgumentException("Give a query, a filter or a category (restaurants, stays, attractions, activities).");
+
+            var key = $"destinations_paged_{placeId}_{text.ToLowerInvariant()}";
+            if (_cache.TryGetValue($"{key}_p{page}", out PagedPlacesDto cachedPage))
+                return cachedPage;
+
+            var response = await FetchTextSearchPage(text, key, page, cancellationToken);
+            var result = new PagedPlacesDto
+            {
+                Page = page,
+                // Light quality bar: hide unrated and barely-reviewed places,
+                // but keep smaller, newer ones the curated lists leave out.
+                Places = (response?.Results ?? new List<GoogleTextSearchResult>())
+                    .Where(r => (r.Rating ?? 0) >= 3.8 && (r.UserRatingsTotal ?? 0) >= 20)
+                    .OrderByDescending(PlaceScore)
+                    .Select(ToPlaceDto)
+                    .ToList(),
+                HasMore = page < MaxPages - 1 && !string.IsNullOrEmpty(response?.NextPageToken),
+            };
+
+            _cache.Set($"{key}_p{page}", result, CacheDuration);
+            if (!string.IsNullOrEmpty(response?.NextPageToken))
+                _cache.Set($"{key}_t{page + 1}", response.NextPageToken, PageTokenLifetime);
+            return result;
+        }
+
+        // Raw page `page` of a text search. Pages after the first need the
+        // token from the page before, so a missing token re-fetches that page.
+        private async Task<GoogleTextSearchResponse> FetchTextSearchPage(string text, string key, int page, CancellationToken cancellationToken)
+        {
+            string token = null;
+            if (page > 0 && !_cache.TryGetValue($"{key}_t{page}", out token))
+            {
+                var previous = await FetchTextSearchPage(text, key, page - 1, cancellationToken);
+                token = previous?.NextPageToken;
+                if (string.IsNullOrEmpty(token))
+                    return new GoogleTextSearchResponse { Results = new List<GoogleTextSearchResult>() };
+            }
+
+            // Later pages must repeat the original parameters (query and
+            // language) alongside the token, or Google answers INVALID_REQUEST.
+            var url = $"{_settings.BaseUrl}/textsearch/json?query={Uri.EscapeDataString(text)}&language=en&key={_settings.ApiKey}";
+            if (page > 0)
+                url += $"&pagetoken={Uri.EscapeDataString(token)}";
+
+            // A fresh token is also not valid for a moment (INVALID_REQUEST);
+            // wait and retry a few times.
+            for (var attempt = 0; ; attempt++)
+            {
+                var httpResponse = await _httpClient.GetAsync(url, cancellationToken);
+                httpResponse.EnsureSuccessStatusCode();
+                var content = await httpResponse.Content.ReadFromJsonAsync<GoogleTextSearchResponse>(cancellationToken: cancellationToken);
+                if (page > 0 && content?.Status == "INVALID_REQUEST" && attempt < 3)
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(1500), cancellationToken);
+                    continue;
+                }
+                // Anything but a real answer is an error: never cache it as "no places".
+                if (content?.Status != "OK" && content?.Status != "ZERO_RESULTS")
+                    throw new HttpRequestException($"Google Text Search failed: {content?.Status ?? "no response"}");
+                if (!string.IsNullOrEmpty(content.NextPageToken))
+                    _cache.Set($"{key}_t{page + 1}", content.NextPageToken, PageTokenLifetime);
+                return content;
+            }
         }
 
         public async Task<PlaceDetailsDto> GetPlaceDetails(string placeId, CancellationToken cancellationToken = default)

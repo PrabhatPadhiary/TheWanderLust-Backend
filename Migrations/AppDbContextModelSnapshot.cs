@@ -117,6 +117,12 @@ namespace TheWanderLustWebAPI.Migrations
                     b.Property<DateTime>("ScheduledDate")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("Slot")
+                        .HasColumnType("text");
+
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("integer");
+
                     b.Property<string>("StartTime")
                         .HasColumnType("text");
 
@@ -352,6 +358,9 @@ namespace TheWanderLustWebAPI.Migrations
 
                     b.Property<string>("PrimaryDestination")
                         .HasColumnType("text");
+
+                    b.Property<Guid?>("PrimaryDestinationId")
+                        .HasColumnType("uuid");
 
                     b.Property<DateTime?>("StartDate")
                         .HasColumnType("timestamp with time zone");
@@ -610,6 +619,9 @@ namespace TheWanderLustWebAPI.Migrations
                         .HasColumnType("boolean");
 
                     b.Property<string>("Name")
+                        .HasColumnType("text");
+
+                    b.Property<string>("PhotoUrl")
                         .HasColumnType("text");
 
                     b.Property<string>("Role")
