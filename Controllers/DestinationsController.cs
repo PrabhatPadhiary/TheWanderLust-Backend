@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
 using System.Text.Json.Serialization;
@@ -9,6 +10,9 @@ namespace TheWanderLustWebAPI.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
+    // Every endpoint here can call Google Places (paid): rate-limited per IP.
+    // Photo endpoints use a looser limit (see their attributes).
+    [EnableRateLimiting(RateLimits.Google)]
     public class DestinationsController : ControllerBase
     {
         private readonly IGooglePlacesService _placesService;
@@ -171,6 +175,7 @@ namespace TheWanderLustWebAPI.Controllers
         /// 404 when the place has no photo; 502 when Google can't be reached.
         /// </summary>
         [HttpGet("place-photo")]
+        [EnableRateLimiting(RateLimits.Photos)]
         public async Task<IActionResult> PlacePhoto(
             [FromQuery] string placeId,
             [FromQuery] int maxWidth = 800,
@@ -203,6 +208,7 @@ namespace TheWanderLustWebAPI.Controllers
         /// Get a place photo by reference. Proxies Google Places Photo API.
         /// </summary>
         [HttpGet("photo")]
+        [EnableRateLimiting(RateLimits.Photos)]
         public async Task<IActionResult> Photo([FromQuery] string reference, [FromQuery] int maxWidth = 400, CancellationToken cancellationToken = default)
         {
             if (string.IsNullOrWhiteSpace(reference))
