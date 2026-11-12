@@ -24,6 +24,9 @@ namespace TheWanderLustWebAPI.Context
         public DbSet<JournalLike> JournalLikes { get; set; }
         public DbSet<JournalComment> JournalComments { get; set; }
         public DbSet<ItineraryItem> ItineraryItems { get; set; }
+        public DbSet<JournalReport> JournalReports { get; set; }
+        public DbSet<UserBlock> UserBlocks { get; set; }
+        public DbSet<HiddenJournal> HiddenJournals { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -165,6 +168,36 @@ namespace TheWanderLustWebAPI.Context
                     .WithMany(j => j.Photos)
                     .HasForeignKey(e => e.JournalId)
                     .OnDelete(DeleteBehavior.Cascade);
+            });
+
+            // Community safety: reports, blocks and "Not interested". All
+            // cascade, so deleting a user or a story removes their rows too.
+            modelBuilder.Entity<JournalReport>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+                entity.HasIndex(e => new { e.JournalId, e.ReporterId }).IsUnique();
+                entity.HasIndex(e => e.Status);
+                entity.Property(e => e.Reason).HasMaxLength(30);
+                entity.Property(e => e.Details).HasMaxLength(500);
+                entity.Property(e => e.Status).HasMaxLength(20);
+                entity.HasOne(e => e.Journal).WithMany().HasForeignKey(e => e.JournalId).OnDelete(DeleteBehavior.Cascade);
+                entity.HasOne(e => e.Reporter).WithMany().HasForeignKey(e => e.ReporterId).OnDelete(DeleteBehavior.Cascade);
+            });
+
+            modelBuilder.Entity<UserBlock>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+                entity.HasIndex(e => new { e.BlockerId, e.BlockedId }).IsUnique();
+                entity.HasOne(e => e.Blocker).WithMany().HasForeignKey(e => e.BlockerId).OnDelete(DeleteBehavior.Cascade);
+                entity.HasOne(e => e.Blocked).WithMany().HasForeignKey(e => e.BlockedId).OnDelete(DeleteBehavior.Cascade);
+            });
+
+            modelBuilder.Entity<HiddenJournal>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+                entity.HasIndex(e => new { e.UserId, e.JournalId }).IsUnique();
+                entity.HasOne(e => e.User).WithMany().HasForeignKey(e => e.UserId).OnDelete(DeleteBehavior.Cascade);
+                entity.HasOne(e => e.Journal).WithMany().HasForeignKey(e => e.JournalId).OnDelete(DeleteBehavior.Cascade);
             });
 
             modelBuilder.Entity<JournalLike>(entity =>

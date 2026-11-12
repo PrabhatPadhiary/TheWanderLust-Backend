@@ -13,11 +13,23 @@ namespace TheWanderLustWebAPI.Services
         private readonly IMemoryCache _cache;
         private static readonly TimeSpan CacheDuration = TimeSpan.FromHours(24);
 
-        public GooglePlacesService(HttpClient httpClient, IOptions<GooglePlacesSettings> options, IMemoryCache cache)
+        public GooglePlacesService(HttpClient httpClient, IOptions<GooglePlacesSettings> options, IMemoryCache cache, IHttpContextAccessor httpContextAccessor)
         {
             _httpClient = httpClient;
             _settings = options.Value;
             _cache = cache;
+            _httpContextAccessor = httpContextAccessor;
+        }
+
+        private readonly IHttpContextAccessor _httpContextAccessor;
+
+        // Photo link for clients: our proxy (never Google's URL, which needs
+        // the API key). Built from the current request's host.
+        private string PhotoLink(string reference, int maxWidth = 800)
+        {
+            var request = _httpContextAccessor.HttpContext?.Request;
+            var baseUrl = request != null ? PlacePhotoLinks.BaseUrl(request) : "";
+            return PlacePhotoLinks.Proxy(baseUrl, reference, maxWidth);
         }
 
         public async Task<List<PlaceDto>> SearchByFilter(string placeId, string filter, CancellationToken cancellationToken = default)        {
@@ -113,6 +125,128 @@ namespace TheWanderLustWebAPI.Services
             ["wildlife"]   = "best wildlife and safari destinations",
         };
 
+        // ── "Near you" for a home-screen category ─────────────────────────────
+        // Real places of that kind around the user, nearest first: "<kind> to
+        // visit from <city>" through Text Search, then filtered hard — wrong
+        // types (travel agents, resorts, restaurants called "... Beach"), names
+        // that don't match the kind, little-known spots and anything too far
+        // are dropped, and near-duplicates (the same hill listed twice) merged.
+        // Cities have no "near you" list: you're already in one.
+        private record NearbyTheme(
+            string Query,
+            int MaxKm,
+            int MinReviews,
+            string[] Kinds,
+            System.Text.RegularExpressions.Regex NameMustMatch = null,
+            string[] ExtraExcludedTypes = null);
+
+        private static System.Text.RegularExpressions.Regex Rx(string pattern) =>
+            new(pattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        private static readonly Dictionary<string, NearbyTheme> NearbyThemeMap = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["beaches"] = new("best beaches to visit from {0}", 800, 200,
+                new[] { "natural_feature", "tourist_attraction", "park" },
+                Rx(@"\bbeach")),
+            ["mountains"] = new("hill stations to visit from {0}", 400, 500,
+                new[] { "natural_feature", "tourist_attraction", "park" }),
+            ["historical"] = new("historical places to visit from {0}", 400, 1000,
+                new[] { "tourist_attraction", "museum", "place_of_worship", "hindu_temple", "church", "mosque" },
+                ExtraExcludedTypes: new[] { "park", "amusement_park", "aquarium" }),
+            ["islands"] = new("islands to visit from {0}", 1200, 300,
+                new[] { "natural_feature", "tourist_attraction", "locality", "colloquial_area", "archipelago" },
+                Rx(@"\b(island|islands|isle|dweep|dvip)\b")),
+            ["wildlife"] = new("national parks to visit from {0}", 500, 200,
+                new[] { "park", "zoo", "tourist_attraction", "natural_feature" },
+                Rx(@"national park|tiger|reserve|sanctuary|safari|forest|wildlife")),
+        };
+
+        // Types that mark a business rather than a place to go.
+        private static readonly HashSet<string> BusinessTypes = new(StringComparer.Ordinal)
+        {
+            "travel_agency", "lodging", "store", "real_estate_agency", "restaurant", "food", "cafe", "bar",
+            "car_rental", "gym", "school", "university", "health", "finance", "general_contractor",
+            "moving_company", "car_dealer", "shopping_mall", "clothing_store", "spa", "night_club",
+            "insurance_agency", "local_government_office", "campground", "rv_park", "storage",
+            "veterinary_care", "transit_station",
+        };
+
+        // Names that give away a business or a charity, whatever its types say.
+        private static readonly System.Text.RegularExpressions.Regex BusinessName =
+            Rx(@"\b(pet|rescue|rehab\w*|ngo|foundation|trip|trips|tour|tours|travels?|holidays?|adventures?|trek\w*|resorts?|stays?|homestay|camps?)\b");
+
+        public async Task<List<PlaceDto>> SearchThemeNearby(string theme, double lat, double lng, string near, CancellationToken cancellationToken = default)
+        {
+            if (!NearbyThemeMap.TryGetValue(theme?.Trim() ?? "", out var cfg))
+                throw new ArgumentException($"No nearby list for theme '{theme}'. Valid values: {string.Join(", ", NearbyThemeMap.Keys)}.");
+
+            var inv = System.Globalization.CultureInfo.InvariantCulture;
+            var place = string.IsNullOrWhiteSpace(near)
+                ? $"{lat.ToString("F3", inv)},{lng.ToString("F3", inv)}"
+                : near.Trim();
+            if (place.Length > 80) place = place[..80];
+
+            var cacheKey = $"destinations_theme_near_{theme.ToLowerInvariant()}_{lat:F1}_{lng:F1}";
+            if (_cache.TryGetValue(cacheKey, out List<PlaceDto> cached))
+                return cached;
+
+            // No location bias: it pulls in small local matches; "from <city>"
+            // in the query already anchors the search.
+            var query = Uri.EscapeDataString(string.Format(cfg.Query, place));
+            var url = $"{_settings.BaseUrl}/textsearch/json?query={query}&language=en&key={_settings.ApiKey}";
+            var response = await _httpClient.GetAsync(url, cancellationToken);
+            response.EnsureSuccessStatusCode();
+            var content = await response.Content.ReadFromJsonAsync<GoogleTextSearchResponse>(cancellationToken: cancellationToken);
+
+            var candidates = new List<(PlaceDto Dto, int Reviews)>();
+            foreach (var r in content?.Results ?? new List<GoogleTextSearchResult>())
+            {
+                if (r.Geometry?.Location == null || string.IsNullOrWhiteSpace(r.Name)) continue;
+                var types = r.Types ?? new List<string>();
+                if (types.Any(BusinessTypes.Contains)) continue;
+                if (cfg.ExtraExcludedTypes != null && types.Any(cfg.ExtraExcludedTypes.Contains)) continue;
+                if (!types.Any(cfg.Kinds.Contains)) continue;
+                if (BusinessName.IsMatch(r.Name)) continue;
+                if (cfg.NameMustMatch != null && !cfg.NameMustMatch.IsMatch(r.Name)) continue;
+                var reviews = r.UserRatingsTotal ?? 0;
+                if (reviews < cfg.MinReviews || (r.Rating ?? 0) < 3.8) continue;
+
+                var dto = ToPlaceDto(r);
+                dto.DistanceKm = Math.Round(HaversineKm(lat, lng, r.Geometry.Location.Lat, r.Geometry.Location.Lng), 1);
+                candidates.Add((dto, reviews));
+            }
+
+            // Merge near-duplicates (within 2 km): keep the better-known one.
+            var kept = new List<(PlaceDto Dto, int Reviews)>();
+            foreach (var c in candidates.OrderByDescending(c => c.Reviews))
+            {
+                var g = c.Dto.Geometry;
+                if (kept.Any(k => HaversineKm(k.Dto.Geometry.Latitude, k.Dto.Geometry.Longitude, g.Latitude, g.Longitude) < 2))
+                    continue;
+                kept.Add(c);
+            }
+
+            var ordered = kept.Select(k => k.Dto).OrderBy(p => p.DistanceKm).ToList();
+            // Within reach first; if nothing is, the few nearest anyway (the app
+            // says how far they are).
+            var within = ordered.Where(p => p.DistanceKm <= cfg.MaxKm).Take(12).ToList();
+            var results = within.Count > 0 ? within : ordered.Take(3).ToList();
+
+            _cache.Set(cacheKey, results, CacheDuration);
+            return results;
+        }
+
+        private static double HaversineKm(double lat1, double lng1, double lat2, double lng2)
+        {
+            const double R = 6371;
+            double Rad(double d) => d * Math.PI / 180;
+            var dLat = Rad(lat2 - lat1);
+            var dLng = Rad(lng2 - lng1);
+            var h = Math.Pow(Math.Sin(dLat / 2), 2)
+                + Math.Cos(Rad(lat1)) * Math.Cos(Rad(lat2)) * Math.Pow(Math.Sin(dLng / 2), 2);
+            return 2 * R * Math.Asin(Math.Sqrt(h));
+        }
+
         public async Task<List<PlaceDto>> SearchByTheme(string theme, double? lat = null, double? lng = null, CancellationToken cancellationToken = default)
         {
             if (!ThemeQueryMap.TryGetValue(theme?.Trim() ?? "", out var query))
@@ -190,7 +324,7 @@ namespace TheWanderLustWebAPI.Services
                 : null,
             Photos = r.Photos?.Take(1).Select(p => new PhotoDto
             {
-                Url = $"{_settings.BaseUrl}/photo?maxwidth=800&photo_reference={p.PhotoReference}&key={_settings.ApiKey}"
+                Url = PhotoLink(p.PhotoReference)
             }).ToList() ?? new List<PhotoDto>()
         };
 
@@ -333,9 +467,9 @@ namespace TheWanderLustWebAPI.Services
                         Longitude = result.Geometry.Location.Lng
                     }
                     : null,
-                Photos = result.Photos?.Take(5).Select(p => new PhotoDto
+                Photos = result.Photos?.Take(10).Select(p => new PhotoDto
                 {
-                    Url = $"{_settings.BaseUrl}/photo?maxwidth=800&photo_reference={p.PhotoReference}&key={_settings.ApiKey}"
+                    Url = PhotoLink(p.PhotoReference)
                 }).ToList() ?? new List<PhotoDto>(),
                 Reviews = result.Reviews?.Select(r => new ReviewDto
                 {

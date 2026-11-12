@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using TheWanderLustWebAPI.Context;
 using TheWanderLustWebAPI.Models;
 using TheWanderLustWebAPI.Models.Dtos;
+using TheWanderLustWebAPI.Services;
 
 namespace TheWanderLustWebAPI.Controllers
 {
@@ -213,7 +214,7 @@ namespace TheWanderLustWebAPI.Controllers
                 Description = dto.Description,
                 StartDate = ToUtc(dto.StartDate),
                 EndDate = ToUtc(dto.EndDate),
-                CoverPhotoUrl = dto.CoverPhotoUrl,
+                CoverPhotoUrl = PlacePhotoLinks.StripKey(dto.CoverPhotoUrl),
                 TravelersCount = dto.TravelersCount,
                 PrimaryDestination = dto.PrimaryDestination,
                 TotalBudget = dto.TotalBudget,
@@ -246,7 +247,7 @@ namespace TheWanderLustWebAPI.Controllers
                     Name = dto.Destination.Name,
                     Latitude = dto.Destination.Latitude,
                     Longitude = dto.Destination.Longitude,
-                    PhotoUrl = dto.Destination.PhotoUrl,
+                    PhotoUrl = PlacePhotoLinks.StripKey(dto.Destination.PhotoUrl),
                     Order = dto.Destination.Order,
                     StartDate = ToUtc(dto.Destination.StartDate),
                     EndDate = ToUtc(dto.Destination.EndDate),
@@ -310,7 +311,7 @@ namespace TheWanderLustWebAPI.Controllers
                 return BadRequest("End date must be after start date.");
 
             if (dto.CoverPhotoUrl != null)
-                trip.CoverPhotoUrl = dto.CoverPhotoUrl;
+                trip.CoverPhotoUrl = PlacePhotoLinks.StripKey(dto.CoverPhotoUrl);
 
             if (dto.TravelersCount.HasValue)
                 trip.TravelersCount = dto.TravelersCount.Value;
@@ -364,7 +365,7 @@ namespace TheWanderLustWebAPI.Controllers
                 Name = dto.Name,
                 Latitude = dto.Latitude,
                 Longitude = dto.Longitude,
-                PhotoUrl = dto.PhotoUrl,
+                PhotoUrl = PlacePhotoLinks.StripKey(dto.PhotoUrl),
                 Order = dto.Order,
                 StartDate = ToUtc(dto.StartDate),
                 EndDate = ToUtc(dto.EndDate),

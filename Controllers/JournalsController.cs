@@ -13,36 +13,36 @@ namespace TheWanderLustWebAPI.Controllers
     {
         private readonly AppDbContext _dbContext;
         private readonly CloudinaryService _cloudinaryService;
+        private readonly ILogger<JournalsController> _logger;
 
-        public JournalsController(AppDbContext dbContext, CloudinaryService cloudinaryService)
+        public JournalsController(AppDbContext dbContext, CloudinaryService cloudinaryService, ILogger<JournalsController> logger)
         {
             _dbContext = dbContext;
             _cloudinaryService = cloudinaryService;
+            _logger = logger;
         }
 
         /// <summary>
-        /// Get all public published journals (feed). No auth required.
+        /// Public published journals, newest first (the latest FeedLimit). No auth
+        /// required; signed in, each says whether you liked it, and stories from
+        /// people you blocked or ones you hid / reported are left out.
+        /// One database round trip for the stories (plus finding who you are).
         /// </summary>
         [HttpGet("feed")]
         public async Task<IActionResult> GetFeed()
         {
-            // Resolve current user if logged in — used for isLiked
             var userId = await GetCurrentUserId();
-
-            // Fetch liked journal IDs for this user in one query
-            HashSet<Guid> likedIds = userId.HasValue
-                ? new HashSet<Guid>(await _dbContext.JournalLikes
-                    .Where(l => l.UserId == userId.Value)
-                    .Select(l => l.JournalId)
-                    .ToListAsync())
-                : new HashSet<Guid>();
+            var uid = userId ?? Guid.Empty;
+            var signedIn = userId.HasValue;
 
             var journals = await _dbContext.Journals
-                .Include(j => j.User)
-                .Include(j => j.Places)
-                .Include(j => j.Photos)
+                .AsNoTracking()
                 .Where(j => j.Status == "published" && j.Visibility == "public")
+                .Where(j => !signedIn || (
+                    !_dbContext.UserBlocks.Any(b => b.BlockerId == uid && b.BlockedId == j.UserId)
+                    && !_dbContext.HiddenJournals.Any(h => h.UserId == uid && h.JournalId == j.Id)))
                 .OrderByDescending(j => j.PublishedAt)
+                .Take(FeedLimit)
                 .Select(j => new
                 {
                     j.Id,
@@ -75,35 +75,16 @@ namespace TheWanderLustWebAPI.Controllers
                         ph.Id,
                         ph.Url,
                         ph.Order
-                    })
+                    }),
+                    IsLiked = signedIn && _dbContext.JournalLikes.Any(l => l.JournalId == j.Id && l.UserId == uid)
                 })
                 .ToListAsync();
 
-            var result = journals.Select(j => new
-            {
-                j.Id,
-                j.Title,
-                j.Body,
-                j.Destination,
-                j.StartDate,
-                j.EndDate,
-                j.TravelersCount,
-                j.Budget,
-                j.Currency,
-                j.ProTips,
-                j.Vibes,
-                j.LikesCount,
-                j.CommentsCount,
-                j.PublishedAt,
-                j.CreatedAt,
-                j.Author,
-                j.Places,
-                j.Photos,
-                IsLiked = likedIds.Contains(j.Id)
-            });
-
-            return Ok(result);
+            return Ok(journals);
         }
+
+        // The feed returns at most this many of the newest stories.
+        private const int FeedLimit = 60;
 
         /// <summary>
         /// Public, published journals that tag a place (by Google place id),
@@ -125,9 +106,12 @@ namespace TheWanderLustWebAPI.Controllers
                     .ToListAsync())
                 : new HashSet<Guid>();
 
+            var (blocked, hidden) = await ExclusionsFor(userId);
+
             var journals = await _dbContext.Journals
                 .Where(j => j.Status == "published" && j.Visibility == "public"
                     && j.Places.Any(p => p.GooglePlaceId == googlePlaceId))
+                .Where(j => !blocked.Contains(j.UserId) && !hidden.Contains(j.Id))
                 .OrderByDescending(j => j.PublishedAt)
                 .Take(take)
                 .Select(j => new
@@ -180,11 +164,16 @@ namespace TheWanderLustWebAPI.Controllers
 
             var journals = await _dbContext.Journals
                 .Include(j => j.Places)
+                .Include(j => j.Photos)
+                .Include(j => j.User)
                 .Where(j => j.UserId == userId.Value)
                 .OrderByDescending(j => j.UpdatedAt)
                 .Select(j => new
                 {
                     j.Id,
+                    // Same shape as the feed, so the app can show the same cards.
+                    Author = new { j.User.Id, j.User.Name, j.User.PhotoUrl },
+                    Photos = j.Photos.OrderBy(ph => ph.Order).Select(ph => new { ph.Id, ph.Url, ph.Order }),
                     j.TripId,
                     j.Title,
                     j.Body,
@@ -247,10 +236,16 @@ namespace TheWanderLustWebAPI.Controllers
             var isLikedByMe = userId.HasValue && await _dbContext.JournalLikes
                 .AnyAsync(l => l.JournalId == id && l.UserId == userId.Value);
 
+            // Someone you blocked: their story isn't shown (as if it's gone);
+            // nor are their comments on anyone's story.
+            var (blockedUsers, _) = await ExclusionsFor(userId);
+            if (blockedUsers.Contains(journal.UserId))
+                return NotFound("Journal not found.");
+
             // Fetch comments with author info
             var comments = await _dbContext.JournalComments
                 .Include(c => c.User)
-                .Where(c => c.JournalId == id)
+                .Where(c => c.JournalId == id && !blockedUsers.Contains(c.UserId))
                 .OrderBy(c => c.CreatedAt)
                 .Select(c => new
                 {
@@ -544,6 +539,17 @@ namespace TheWanderLustWebAPI.Controllers
             _dbContext.Journals.Remove(journal);
             await _dbContext.SaveChangesAsync();
 
+            // Its photos too (uploaded under journals/{id}/). The story is gone
+            // either way; a failure here only leaves files behind, so log it.
+            try
+            {
+                await _cloudinaryService.DeleteFolderAsync($"journals/{id}");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Could not delete Cloudinary photos for journal {JournalId}.", id);
+            }
+
             return Ok(new { message = "Journal deleted." });
         }
 
@@ -678,7 +684,167 @@ namespace TheWanderLustWebAPI.Controllers
             _dbContext.JournalPhotos.Remove(photo);
             await _dbContext.SaveChangesAsync();
 
+            try
+            {
+                await _cloudinaryService.DeleteImageByUrlAsync(photo.Url);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Could not delete Cloudinary photo {PhotoId} of journal {JournalId}.", photoId, journalId);
+            }
+
             return Ok(new { message = "Photo deleted." });
+        }
+
+        /// <summary>
+        /// Set the order of a journal's photos (the first is the cover). Only the
+        /// author can reorder. Body: the photo ids in the new order; photos not
+        /// listed keep their place after them.
+        /// </summary>
+        [HttpPut("{id}/photos/order")]
+        [Authorize]
+        public async Task<IActionResult> ReorderPhotos(Guid id, [FromBody] List<Guid> photoIds)
+        {
+            var userId = await GetCurrentUserId();
+            if (userId == null)
+                return Unauthorized();
+
+            var journal = await _dbContext.Journals
+                .Include(j => j.Photos)
+                .FirstOrDefaultAsync(j => j.Id == id && j.UserId == userId.Value);
+            if (journal == null)
+                return NotFound("Journal not found.");
+
+            var order = (photoIds ?? new List<Guid>()).Distinct().ToList();
+            var position = 0;
+            foreach (var photoId in order)
+            {
+                var photo = journal.Photos.FirstOrDefault(p => p.Id == photoId);
+                if (photo != null) photo.Order = position++;
+            }
+            foreach (var photo in journal.Photos.Where(p => !order.Contains(p.Id)).OrderBy(p => p.Order))
+                photo.Order = position++;
+
+            journal.UpdatedAt = DateTime.UtcNow;
+            await _dbContext.SaveChangesAsync();
+            return Ok(journal.Photos.OrderBy(p => p.Order).Select(p => new { p.Id, p.Url, p.Order }));
+        }
+
+        // ─── Community safety: report, "not interested" ─────────────────────────
+
+        private static readonly HashSet<string> ReportReasons = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "spam", "inappropriate", "harassment", "false_info", "other",
+        };
+
+        public class ReportJournalDto
+        {
+            public string Reason { get; set; } = "other";
+            public string? Details { get; set; }
+        }
+
+        /// <summary>
+        /// Report a story. One report per person per story (reporting again
+        /// updates it). The story is also hidden from the reporter's feed.
+        /// </summary>
+        [HttpPost("{id}/report")]
+        [Authorize]
+        public async Task<IActionResult> Report(Guid id, [FromBody] ReportJournalDto dto)
+        {
+            var userId = await GetCurrentUserId();
+            if (userId == null)
+                return Unauthorized();
+            var reason = (dto?.Reason ?? "").Trim().ToLowerInvariant();
+            if (!ReportReasons.Contains(reason))
+                return BadRequest("Pick a reason: spam, inappropriate, harassment, false_info or other.");
+
+            var journal = await _dbContext.Journals.FirstOrDefaultAsync(j => j.Id == id);
+            if (journal == null)
+                return NotFound("Journal not found.");
+            if (journal.UserId == userId.Value)
+                return BadRequest("You can't report your own story.");
+
+            var details = string.IsNullOrWhiteSpace(dto?.Details) ? null : dto.Details.Trim();
+            if (details?.Length > 500) details = details[..500];
+
+            var report = await _dbContext.JournalReports
+                .FirstOrDefaultAsync(r => r.JournalId == id && r.ReporterId == userId.Value);
+            if (report == null)
+            {
+                _dbContext.JournalReports.Add(new JournalReport
+                {
+                    Id = Guid.NewGuid(),
+                    JournalId = id,
+                    ReporterId = userId.Value,
+                    Reason = reason,
+                    Details = details,
+                });
+            }
+            else
+            {
+                report.Reason = reason;
+                report.Details = details;
+                report.Status = "open";
+                report.CreatedAt = DateTime.UtcNow;
+            }
+            await HideFor(userId.Value, id);
+            await _dbContext.SaveChangesAsync();
+
+            var open = await _dbContext.JournalReports.CountAsync(r => r.JournalId == id && r.Status == "open");
+            _logger.LogWarning("Story {JournalId} reported ({Reason}); {Open} open report(s) on it.", id, reason, open);
+
+            return Ok(new { message = "Thanks, we'll take a look." });
+        }
+
+        /// <summary>"Not interested": hide a story from your own feed.</summary>
+        [HttpPost("{id}/hide")]
+        [Authorize]
+        public async Task<IActionResult> Hide(Guid id)
+        {
+            var userId = await GetCurrentUserId();
+            if (userId == null)
+                return Unauthorized();
+            if (!await _dbContext.Journals.AnyAsync(j => j.Id == id))
+                return NotFound("Journal not found.");
+            await HideFor(userId.Value, id);
+            await _dbContext.SaveChangesAsync();
+            return Ok(new { hidden = true });
+        }
+
+        /// <summary>Undo "Not interested".</summary>
+        [HttpDelete("{id}/hide")]
+        [Authorize]
+        public async Task<IActionResult> Unhide(Guid id)
+        {
+            var userId = await GetCurrentUserId();
+            if (userId == null)
+                return Unauthorized();
+            _dbContext.HiddenJournals.RemoveRange(
+                _dbContext.HiddenJournals.Where(h => h.UserId == userId.Value && h.JournalId == id));
+            await _dbContext.SaveChangesAsync();
+            return Ok(new { hidden = false });
+        }
+
+        private async Task HideFor(Guid userId, Guid journalId)
+        {
+            if (!await _dbContext.HiddenJournals.AnyAsync(h => h.UserId == userId && h.JournalId == journalId))
+                _dbContext.HiddenJournals.Add(new HiddenJournal { Id = Guid.NewGuid(), UserId = userId, JournalId = journalId });
+        }
+
+        /// <summary>People this user blocked, and stories they hid or reported (empty when signed out).</summary>
+        private async Task<(List<Guid> Blocked, List<Guid> Hidden)> ExclusionsFor(Guid? userId)
+        {
+            if (userId == null)
+                return (new List<Guid>(), new List<Guid>());
+            var blocked = await _dbContext.UserBlocks
+                .Where(b => b.BlockerId == userId.Value)
+                .Select(b => b.BlockedId)
+                .ToListAsync();
+            var hidden = await _dbContext.HiddenJournals
+                .Where(h => h.UserId == userId.Value)
+                .Select(h => h.JournalId)
+                .ToListAsync();
+            return (blocked, hidden);
         }
 
         private async Task<Guid?> GetCurrentUserId()
@@ -710,9 +876,10 @@ namespace TheWanderLustWebAPI.Controllers
                     return NotFound("Journal not found.");
             }
 
+            var (blockedUsers, _) = await ExclusionsFor(await GetCurrentUserId());
             var comments = await _dbContext.JournalComments
                 .Include(c => c.User)
-                .Where(c => c.JournalId == id)
+                .Where(c => c.JournalId == id && !blockedUsers.Contains(c.UserId))
                 .OrderBy(c => c.CreatedAt)
                 .Select(c => new
                 {

@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using TheWanderLustWebAPI.Context;
+using TheWanderLustWebAPI.Models;
 
 namespace TheWanderLustWebAPI.Controllers
 {
@@ -32,6 +33,58 @@ namespace TheWanderLustWebAPI.Controllers
         /// Profile plus travel stats. Trips count every trip the user is on
         /// (owned or joined); destinations are distinct places across them.
         /// </summary>
+        // ─── Blocking ─────────────────────────────────────────────────────────
+
+        /// <summary>
+        /// Block someone: you stop seeing their stories and comments anywhere.
+        /// They aren't told.
+        /// </summary>
+        [HttpPost("{id:guid}/block")]
+        public async Task<IActionResult> Block(Guid id)
+        {
+            var user = await GetCurrentUser();
+            if (user == null)
+                return Unauthorized();
+            if (id == user.Id)
+                return BadRequest("You can't block yourself.");
+            if (!await _dbContext.Users.AnyAsync(u => u.Id == id))
+                return NotFound("User not found.");
+            if (!await _dbContext.UserBlocks.AnyAsync(b => b.BlockerId == user.Id && b.BlockedId == id))
+            {
+                _dbContext.UserBlocks.Add(new UserBlock { Id = Guid.NewGuid(), BlockerId = user.Id, BlockedId = id });
+                await _dbContext.SaveChangesAsync();
+            }
+            return Ok(new { blocked = true });
+        }
+
+        /// <summary>Unblock someone.</summary>
+        [HttpDelete("{id:guid}/block")]
+        public async Task<IActionResult> Unblock(Guid id)
+        {
+            var user = await GetCurrentUser();
+            if (user == null)
+                return Unauthorized();
+            _dbContext.UserBlocks.RemoveRange(
+                _dbContext.UserBlocks.Where(b => b.BlockerId == user.Id && b.BlockedId == id));
+            await _dbContext.SaveChangesAsync();
+            return Ok(new { blocked = false });
+        }
+
+        /// <summary>The people you've blocked, most recent first.</summary>
+        [HttpGet("me/blocked")]
+        public async Task<IActionResult> GetBlocked()
+        {
+            var user = await GetCurrentUser();
+            if (user == null)
+                return Unauthorized();
+            var blocked = await _dbContext.UserBlocks
+                .Where(b => b.BlockerId == user.Id)
+                .OrderByDescending(b => b.CreatedAt)
+                .Select(b => new { b.Blocked.Id, b.Blocked.Name, b.Blocked.PhotoUrl, BlockedAt = b.CreatedAt })
+                .ToListAsync();
+            return Ok(blocked);
+        }
+
         [HttpGet("me")]
         public async Task<IActionResult> GetMe()
         {

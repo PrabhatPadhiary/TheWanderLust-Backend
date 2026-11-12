@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using TheWanderLustWebAPI.Context;
 using TheWanderLustWebAPI.Models;
 using TheWanderLustWebAPI.Models.Dtos;
+using TheWanderLustWebAPI.Services;
 
 namespace TheWanderLustWebAPI.Controllers
 {
@@ -92,7 +93,7 @@ namespace TheWanderLustWebAPI.Controllers
                 Vicinity = dto.Vicinity,
                 Rating = dto.Rating,
                 UserRatingsTotal = dto.UserRatingsTotal,
-                PhotoUrl = dto.PhotoUrl,
+                PhotoUrl = PlacePhotoLinks.StripKey(dto.PhotoUrl),
                 Category = dto.Category,
                 Latitude = dto.Latitude,
                 Longitude = dto.Longitude,

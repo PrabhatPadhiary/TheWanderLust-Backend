@@ -107,22 +107,40 @@ namespace TheWanderLustWebAPI.Controllers
             }
         }
 
+        // Google place types the "Near you" list can ask for.
+        private static readonly HashSet<string> NearbyTypes = new(StringComparer.Ordinal)
+        {
+            "tourist_attraction", "restaurant", "cafe", "park", "museum", "bar", "shopping_mall",
+        };
+
         /// <summary>
-        /// Get nearby tourist attractions based on latitude and longitude.
+        /// Get places near a latitude and longitude: tourist attractions by
+        /// default, or one of a few other Google place types (food, cafés, ...).
+        /// <paramref name="limit"/> caps the count (Google returns at most 20).
         /// </summary>
         [HttpGet("nearby")]
-        public async Task<IActionResult> Nearby([FromQuery] double lat, [FromQuery] double lng, [FromQuery] int radius = 30000, CancellationToken cancellationToken = default)
+        public async Task<IActionResult> Nearby(
+            [FromQuery] double lat,
+            [FromQuery] double lng,
+            [FromQuery] int radius = 30000,
+            [FromQuery] string type = "tourist_attraction",
+            [FromQuery] int limit = 10,
+            CancellationToken cancellationToken = default)
         {
             if (lat == 0 && lng == 0)
                 return BadRequest("Valid latitude and longitude are required.");
+            if (!NearbyTypes.Contains(type))
+                return BadRequest("Unsupported place type.");
+            radius = Math.Clamp(radius, 500, 50000);
+            limit = Math.Clamp(limit, 1, 20);
 
-            var cacheKey = $"nearby_{lat:F2}_{lng:F2}_{radius}";
+            var cacheKey = $"nearby_{lat:F2}_{lng:F2}_{radius}_{type}_{limit}";
             if (_cache.TryGetValue(cacheKey, out object cachedResult))
                 return Ok(cachedResult);
 
             try
             {
-                var url = $"https://maps.googleapis.com/maps/api/place/nearbysearch/json?location={lat},{lng}&radius={radius}&type=tourist_attraction&key={_apiKey}";
+                var url = $"https://maps.googleapis.com/maps/api/place/nearbysearch/json?location={lat},{lng}&radius={radius}&type={type}&key={_apiKey}";
                 var response = await _httpClient.GetAsync(url, cancellationToken);
                 response.EnsureSuccessStatusCode();
 
@@ -133,7 +151,7 @@ namespace TheWanderLustWebAPI.Controllers
                 var results = new List<object>();
                 if (root.TryGetProperty("results", out var resultsArray))
                 {
-                    foreach (var place in resultsArray.EnumerateArray().Take(10))
+                    foreach (var place in resultsArray.EnumerateArray().Take(limit))
                     {
                         var photoRef = "";
                         if (place.TryGetProperty("photos", out var photos) && photos.GetArrayLength() > 0)
@@ -152,6 +170,9 @@ namespace TheWanderLustWebAPI.Controllers
                             name = place.GetProperty("name").GetString(),
                             vicinity = place.TryGetProperty("vicinity", out var v) ? v.GetString() : "",
                             rating = place.TryGetProperty("rating", out var r) ? r.GetDouble() : 0,
+                            userRatingsTotal = place.TryGetProperty("user_ratings_total", out var urt) ? urt.GetInt32() : 0,
+                            openNow = place.TryGetProperty("opening_hours", out var oh) && oh.TryGetProperty("open_now", out var on)
+                                ? on.GetBoolean() : (bool?)null,
                             photoReference = photoRef,
                             lat = placeLat,
                             lng = placeLng
@@ -209,14 +230,22 @@ namespace TheWanderLustWebAPI.Controllers
         /// </summary>
         [HttpGet("photo")]
         [EnableRateLimiting(RateLimits.Photos)]
-        public async Task<IActionResult> Photo([FromQuery] string reference, [FromQuery] int maxWidth = 400, CancellationToken cancellationToken = default)
+        public async Task<IActionResult> Photo(
+            [FromQuery] string reference,
+            [FromQuery(Name = "photo_reference")] string photoReference,
+            [FromQuery] int maxWidth = 400,
+            CancellationToken cancellationToken = default)
         {
+            // Links we hand out use photo_reference (see PlacePhotoLinks);
+            // older ones use reference.
+            reference = string.IsNullOrWhiteSpace(reference) ? photoReference : reference;
             if (string.IsNullOrWhiteSpace(reference))
                 return BadRequest("Photo reference is required.");
+            maxWidth = Math.Clamp(maxWidth, 50, 1600);
 
             try
             {
-                var url = $"https://maps.googleapis.com/maps/api/place/photo?maxwidth={maxWidth}&photo_reference={reference}&key={_apiKey}";
+                var url = $"https://maps.googleapis.com/maps/api/place/photo?maxwidth={maxWidth}&photo_reference={Uri.EscapeDataString(reference)}&key={_apiKey}";
                 var response = await _httpClient.GetAsync(url, cancellationToken);
                 response.EnsureSuccessStatusCode();
 
@@ -260,12 +289,13 @@ namespace TheWanderLustWebAPI.Controllers
 
         /// <summary>
         /// Get themed destinations for a home-screen category (beaches, mountains,
-        /// cities, historical, islands, wildlife). When lat/lng are supplied the
-        /// results are biased toward the user's region ("Nearby"); otherwise the
-        /// results are global.
+        /// cities, historical, islands, wildlife). When lat/lng are supplied:
+        /// real places of that kind near the user, nearest first, each with its
+        /// distance (`near` = the user's city name, for the search). Otherwise
+        /// a global search.
         /// </summary>
         [HttpGet("by-category")]
-        public async Task<IActionResult> ByCategory([FromQuery] string theme, [FromQuery] double? lat, [FromQuery] double? lng, CancellationToken cancellationToken)
+        public async Task<IActionResult> ByCategory([FromQuery] string theme, [FromQuery] double? lat, [FromQuery] double? lng, [FromQuery] string near, CancellationToken cancellationToken)
         {
             if (string.IsNullOrWhiteSpace(theme))
                 return BadRequest("theme query parameter is required.");
@@ -273,6 +303,9 @@ namespace TheWanderLustWebAPI.Controllers
             try
             {
                 var biased = lat.HasValue && lng.HasValue && !(lat == 0 && lng == 0);
+                if (biased)
+                    return Ok(await _placesService.SearchThemeNearby(theme, lat.Value, lng.Value, near, cancellationToken));
+
                 var cacheKey = biased
                     ? $"destinations_theme_{theme.ToLowerInvariant()}_{lat:F1}_{lng:F1}"
                     : $"destinations_theme_{theme.ToLowerInvariant()}_global";

@@ -46,6 +46,7 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 builder.Services.Configure<GooglePlacesSettings>(
     builder.Configuration.GetSection("GooglePlaces"));
 builder.Services.AddMemoryCache();
+builder.Services.AddHttpContextAccessor();
 builder.Services.AddHttpClient<IGooglePlacesService, GooglePlacesService>();
 // Place id -> main photo, with its own size-limited cache (see PlacePhotoService).
 builder.Services.AddHttpClient(nameof(PlacePhotoService));
@@ -116,6 +117,10 @@ var app = builder.Build();
 
 // First, so everything after sees the real client IP and scheme.
 app.UseForwardedHeaders();
+
+// Google photo links in any JSON response become links to our photo proxy,
+// so the Google API key never leaves the server (see PlacePhotoLinks).
+app.UseMiddleware<TheWanderLustWebAPI.Middleware.PhotoLinkRewriteMiddleware>();
 
 if (app.Environment.IsDevelopment())
 {

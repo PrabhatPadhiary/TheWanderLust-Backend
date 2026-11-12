@@ -22,6 +22,8 @@ namespace TheWanderLustWebAPI.Models.Dtos
         public GeometryDto Geometry { get; set; }
         public List<PhotoDto> Photos { get; set; } = new();
         public List<string> Types { get; set; } = new();
+        /// <summary>Straight-line distance from the user, for "near you" lists.</summary>
+        public double? DistanceKm { get; set; }
     }
 
     public class GeometryDto
