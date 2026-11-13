@@ -14,10 +14,45 @@ namespace TheWanderLustWebAPI.Controllers
     public class TripsController : ControllerBase
     {
         private readonly AppDbContext _dbContext;
+        private readonly IGooglePlacesService _placesService;
+        private readonly ILogger<TripsController> _logger;
 
-        public TripsController(AppDbContext dbContext)
+        public TripsController(AppDbContext dbContext, IGooglePlacesService placesService, ILogger<TripsController> logger)
         {
             _dbContext = dbContext;
+            _placesService = placesService;
+            _logger = logger;
+        }
+
+        /// <summary>
+        /// Looks up a stop's coordinates from Google when they're missing (the app
+        /// can send a trip before the city's details have loaded). Without them the
+        /// app can't show "2.5 km from centre" for the stop's saved spots. Returns
+        /// true if any stop was filled in. Lookups are cached by the places service,
+        /// and a failure just leaves the stop as it was.
+        /// </summary>
+        private async Task<bool> FillMissingCoordinates(IEnumerable<TripDestination> destinations)
+        {
+            var filled = false;
+            foreach (var d in destinations)
+            {
+                if ((d.Latitude != null && d.Longitude != null) || string.IsNullOrWhiteSpace(d.GooglePlaceId))
+                    continue;
+                try
+                {
+                    var geo = (await _placesService.GetPlaceDetails(d.GooglePlaceId))?.Geometry;
+                    if (geo == null || (geo.Latitude == 0 && geo.Longitude == 0))
+                        continue;
+                    d.Latitude = geo.Latitude;
+                    d.Longitude = geo.Longitude;
+                    filled = true;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Couldn't look up coordinates for destination {DestinationId}", d.Id);
+                }
+            }
+            return filled;
         }
 
         [HttpGet]
@@ -129,6 +164,10 @@ namespace TheWanderLustWebAPI.Controllers
 
             if (trip == null)
                 return NotFound("Trip not found.");
+
+            // Older trips may have a stop saved without coordinates: fill them in once.
+            if (await FillMissingCoordinates(trip.Destinations))
+                await _dbContext.SaveChangesAsync();
 
             return Ok(new
             {
@@ -253,6 +292,7 @@ namespace TheWanderLustWebAPI.Controllers
                     EndDate = ToUtc(dto.Destination.EndDate),
                     CreatedAt = DateTime.UtcNow
                 };
+                await FillMissingCoordinates(new[] { destination });
                 _dbContext.TripDestinations.Add(destination);
                 trip.PrimaryDestinationId = destination.Id;
             }
@@ -372,6 +412,7 @@ namespace TheWanderLustWebAPI.Controllers
                 CreatedAt = DateTime.UtcNow
             };
 
+            await FillMissingCoordinates(new[] { destination });
             _dbContext.TripDestinations.Add(destination);
             await _dbContext.SaveChangesAsync();
 

@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using TheWanderLustWebAPI.Auth;
 using TheWanderLustWebAPI.Context;
+using TheWanderLustWebAPI.Live;
 using TheWanderLustWebAPI.Services;
 using TheWanderLustWebAPI.Settings;
 
@@ -56,7 +57,13 @@ builder.Services.Configure<CloudinarySettings>(
     builder.Configuration.GetSection("Cloudinary"));
 builder.Services.AddSingleton<CloudinaryService>();
 
-builder.Services.AddControllers();
+builder.Services.AddControllers(options =>
+{
+    // Live updates for the trip screen: broadcasts each trip change to its viewers.
+    options.Filters.Add<TripLiveUpdatesFilter>();
+});
+builder.Services.AddSignalR();
+builder.Services.AddSingleton<TripPresence>(); // who has each trip open (live "is here too")
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowFrontend",
@@ -144,5 +151,6 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+app.MapHub<TripHub>(TripHub.Path);
 
 app.Run();

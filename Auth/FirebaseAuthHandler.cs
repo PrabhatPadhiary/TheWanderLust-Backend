@@ -18,14 +18,24 @@ namespace TheWanderLustWebAPI.Auth
 
         protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
         {
-            if (!Request.Headers.ContainsKey("Authorization"))
-                return AuthenticateResult.NoResult();
-
+            string token;
             var authHeader = Request.Headers["Authorization"].ToString();
-            if (!authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+            if (authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+            {
+                token = authHeader["Bearer ".Length..].Trim();
+            }
+            else if (Request.Path.StartsWithSegments(TheWanderLustWebAPI.Live.TripHub.Path)
+                && Request.Query.TryGetValue("access_token", out var queryToken)
+                && !string.IsNullOrWhiteSpace(queryToken))
+            {
+                // SignalR's WebSocket can't send headers, so the live-updates hub
+                // (and only it) takes the token from the query string.
+                token = queryToken.ToString();
+            }
+            else
+            {
                 return AuthenticateResult.NoResult();
-
-            var token = authHeader["Bearer ".Length..].Trim();
+            }
 
             try
             {

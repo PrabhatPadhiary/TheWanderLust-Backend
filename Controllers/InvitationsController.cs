@@ -86,11 +86,9 @@ namespace TheWanderLustWebAPI.Controllers
             if (invitation == null)
                 return NotFound("Invitation not found.");
 
-            if (invitation.ExpiresAt < DateTime.UtcNow)
-                return BadRequest("This invitation has expired.");
-
-            if (invitation.UsedBy != null)
-                return BadRequest("This invitation has already been used.");
+            var problem = InvalidReason(invitation);
+            if (problem != null)
+                return BadRequest(problem);
 
             return Ok(new
             {
@@ -128,16 +126,18 @@ namespace TheWanderLustWebAPI.Controllers
             if (invitation == null)
                 return NotFound("Invitation not found.");
 
-            if (invitation.ExpiresAt < DateTime.UtcNow)
-                return BadRequest("This invitation has expired.");
-
-            if (invitation.UsedBy != null)
-                return BadRequest("This invitation has already been used.");
+            var problem = InvalidReason(invitation);
+            if (problem != null)
+                return BadRequest(problem);
 
             // Check if user is already a member
             var alreadyMember = invitation.Trip.Members.Any(m => m.UserId == userId.Value);
             if (alreadyMember)
                 return Conflict("You are already a member of this trip.");
+
+            // A shared link can be forwarded further than intended: cap the group.
+            if (invitation.Trip.Members.Count >= MaxMembers)
+                return BadRequest($"This trip is full (up to {MaxMembers} people).");
 
             // Add user as a trip member with the role specified in the invitation
             var member = new TripMember
@@ -151,8 +151,15 @@ namespace TheWanderLustWebAPI.Controllers
 
             _dbContext.TripMembers.Add(member);
 
-            // Mark invitation as used
-            invitation.UsedBy = userId.Value;
+            // A single-use link is spent; a shared link keeps working for the group.
+            if (!invitation.IsShared)
+                invitation.UsedBy = userId.Value;
+
+            // More people joined than planned: count them all (budget per person
+            // divides by this).
+            var memberCount = invitation.Trip.Members.Count + 1;
+            if (invitation.Trip.TravelersCount < memberCount)
+                invitation.Trip.TravelersCount = memberCount;
 
             await _dbContext.SaveChangesAsync();
 
@@ -189,6 +196,123 @@ namespace TheWanderLustWebAPI.Controllers
         }
 
         /// <summary>
+        /// The trip's shared invite links, one per role ("member" = editor,
+        /// "viewer"): anyone with a link can join. Owner and editors can see them.
+        /// A role without a working link gets one here (the first time, or if it
+        /// was somehow lost); the owner can replace a link with ResetShareLink.
+        /// </summary>
+        [HttpGet("trips/{tripId}/share-links")]
+        public async Task<IActionResult> GetShareLinks(Guid tripId)
+        {
+            var userId = await GetCurrentUserId();
+            if (userId == null)
+                return Unauthorized();
+
+            var role = await GetMemberRole(tripId, userId.Value);
+            if (role == null)
+                return NotFound("Trip not found.");
+            if (role != "owner" && role != "member")
+                return Forbid();
+
+            var shared = await _dbContext.Invitations
+                .Where(i => i.TripId == tripId && i.IsShared && i.RevokedAt == null)
+                .ToListAsync();
+
+            var missing = new[] { "member", "viewer" }
+                .Where(r => !shared.Any(i => i.Role == r))
+                .Select(r => NewSharedLink(tripId, r))
+                .ToList();
+            if (missing.Count > 0)
+            {
+                _dbContext.Invitations.AddRange(missing);
+                shared.AddRange(missing);
+                await _dbContext.SaveChangesAsync();
+            }
+
+            return Ok(ShareLinksResponse(shared));
+        }
+
+        /// <summary>
+        /// Replace one shared link with a new one (e.g. it was forwarded too far).
+        /// The old link stops working. Owner only.
+        /// </summary>
+        [HttpPost("trips/{tripId}/share-links/reset")]
+        public async Task<IActionResult> ResetShareLink(Guid tripId, [FromBody] ShareLinkRoleDto dto)
+        {
+            var userId = await GetCurrentUserId();
+            if (userId == null)
+                return Unauthorized();
+
+            var role = await GetMemberRole(tripId, userId.Value);
+            if (role == null)
+                return NotFound("Trip not found.");
+            if (role != "owner")
+                return Forbid();
+
+            var linkRole = (dto?.Role ?? "").ToLower();
+            if (linkRole != "member" && linkRole != "viewer")
+                return BadRequest("Role must be 'member' or 'viewer'.");
+
+            var shared = await _dbContext.Invitations
+                .Where(i => i.TripId == tripId && i.IsShared)
+                .ToListAsync();
+            foreach (var old in shared.Where(i => i.Role == linkRole && i.RevokedAt == null))
+                old.RevokedAt = DateTime.UtcNow;
+
+            var fresh = NewSharedLink(tripId, linkRole);
+            _dbContext.Invitations.Add(fresh);
+            shared.Add(fresh);
+            await _dbContext.SaveChangesAsync();
+
+            return Ok(ShareLinksResponse(shared));
+        }
+
+        public record ShareLinkRoleDto(string Role);
+
+        /// <summary>Most people a shared link can bring into one trip (owner included).</summary>
+        private const int MaxMembers = 20;
+
+        /// <summary>Why this link can't be used now, or null if it can.</summary>
+        private static string? InvalidReason(Invitation invitation)
+        {
+            if (invitation.IsShared)
+                return invitation.RevokedAt != null
+                    ? "This invite link was replaced with a new one. Ask the trip owner for the new link."
+                    : null;
+            if (invitation.ExpiresAt < DateTime.UtcNow)
+                return "This invitation has expired.";
+            if (invitation.UsedBy != null)
+                return "This invitation has already been used.";
+            return null;
+        }
+
+        private static Invitation NewSharedLink(Guid tripId, string role) => new()
+        {
+            Id = Guid.NewGuid(),
+            TripId = tripId,
+            Role = role,
+            IsShared = true,
+            // Shared links don't expire; only reset / turning off stops them.
+            ExpiresAt = DateTime.UtcNow.AddYears(10),
+            CreatedAt = DateTime.UtcNow,
+        };
+
+        private static object ShareLinksResponse(List<Invitation> shared)
+        {
+            Invitation? Active(string role) => shared
+                .Where(i => i.Role == role && i.RevokedAt == null)
+                .OrderByDescending(i => i.CreatedAt)
+                .FirstOrDefault();
+            var member = Active("member");
+            var viewer = Active("viewer");
+            return new
+            {
+                member = member == null ? null : new { member.Id },
+                viewer = viewer == null ? null : new { viewer.Id },
+            };
+        }
+
+        /// <summary>
         /// Get all invitations for a trip. Owner and editors can view.
         /// </summary>
         [HttpGet("trips/{tripId}/invitations")]
@@ -205,7 +329,7 @@ namespace TheWanderLustWebAPI.Controllers
                 return Forbid();
 
             var invitations = await _dbContext.Invitations
-                .Where(i => i.TripId == tripId)
+                .Where(i => i.TripId == tripId && !i.IsShared)
                 .OrderByDescending(i => i.CreatedAt)
                 .Select(i => new
                 {
