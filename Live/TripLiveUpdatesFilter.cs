@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Mvc.Infrastructure;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using TheWanderLustWebAPI.Context;
+using TheWanderLustWebAPI.Services;
 
 namespace TheWanderLustWebAPI.Live
 {
@@ -47,12 +48,14 @@ namespace TheWanderLustWebAPI.Live
         private readonly AppDbContext _dbContext;
         private readonly IHubContext<TripHub> _hub;
         private readonly ILogger<TripLiveUpdatesFilter> _logger;
+        private readonly TripNotifier _notifier;
 
-        public TripLiveUpdatesFilter(AppDbContext dbContext, IHubContext<TripHub> hub, ILogger<TripLiveUpdatesFilter> logger)
+        public TripLiveUpdatesFilter(AppDbContext dbContext, IHubContext<TripHub> hub, ILogger<TripLiveUpdatesFilter> logger, TripNotifier notifier)
         {
             _dbContext = dbContext;
             _hub = hub;
             _logger = logger;
+            _notifier = notifier;
         }
 
         public async Task OnActionExecutionAsync(ActionExecutingContext context, ActionExecutionDelegate next)
@@ -113,6 +116,7 @@ namespace TheWanderLustWebAPI.Live
                         .Select(u => new { u.Id, u.Name })
                         .FirstOrDefaultAsync();
 
+                var itemName = section == "details" ? null : ItemName(executed.Result);
                 await _hub.Clients.Group(TripHub.GroupFor(tripId.Value)).SendAsync("tripChanged", new
                 {
                     tripId = tripId.Value,
@@ -120,7 +124,7 @@ namespace TheWanderLustWebAPI.Live
                     action = change,
                     actorId = actor?.Id,
                     actorName = actor?.Name,
-                    itemName = section == "details" ? null : ItemName(executed.Result),
+                    itemName,
                     targetId = target?.Id,
                     targetName = target?.Name,
                     role = StringProperty(executed.Result, "Role"),
@@ -129,6 +133,26 @@ namespace TheWanderLustWebAPI.Live
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Live updates: broadcast failed for trip {TripId}", tripId);
+            }
+
+            // And a push notification for the others, for the changes worth one
+            // (queued and grouped: see TripNotifier / NotificationDigestWorker).
+            try
+            {
+                var firebaseUid = context.HttpContext.User.FindFirst("firebase_uid")?.Value;
+                var actorId = firebaseUid == null
+                    ? (Guid?)null
+                    : await _dbContext.Users.Where(u => u.FirebaseId == firebaseUid).Select(u => (Guid?)u.Id).FirstOrDefaultAsync();
+                if (actorId != null)
+                {
+                    var (_, change) = Describe(controller, actionName!, context.HttpContext.Request.Method);
+                    await _notifier.QueueAsync(tripId.Value, actorId.Value, controller, actionName!, change,
+                        ItemName(executed.Result), (executed.Result as ObjectResult)?.Value);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Push: queueing failed for trip {TripId}", tripId);
             }
         }
 

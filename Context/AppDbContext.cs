@@ -27,6 +27,8 @@ namespace TheWanderLustWebAPI.Context
         public DbSet<JournalReport> JournalReports { get; set; }
         public DbSet<UserBlock> UserBlocks { get; set; }
         public DbSet<HiddenJournal> HiddenJournals { get; set; }
+        public DbSet<PushToken> PushTokens { get; set; }
+        public DbSet<PendingNotification> PendingNotifications { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -198,6 +200,30 @@ namespace TheWanderLustWebAPI.Context
                 entity.HasIndex(e => new { e.UserId, e.JournalId }).IsUnique();
                 entity.HasOne(e => e.User).WithMany().HasForeignKey(e => e.UserId).OnDelete(DeleteBehavior.Cascade);
                 entity.HasOne(e => e.Journal).WithMany().HasForeignKey(e => e.JournalId).OnDelete(DeleteBehavior.Cascade);
+            });
+
+            // Push notifications: phones per user, and trip changes waiting to
+            // be grouped and sent. Both go with their user / trip.
+            modelBuilder.Entity<PushToken>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+                entity.HasIndex(e => e.Token).IsUnique();
+                entity.HasIndex(e => e.UserId);
+                entity.Property(e => e.Token).HasMaxLength(200);
+                entity.Property(e => e.Platform).HasMaxLength(20);
+                entity.HasOne(e => e.User).WithMany().HasForeignKey(e => e.UserId).OnDelete(DeleteBehavior.Cascade);
+            });
+
+            modelBuilder.Entity<PendingNotification>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+                entity.HasIndex(e => e.CreatedAt);
+                entity.Property(e => e.Kind).HasMaxLength(20);
+                entity.Property(e => e.Change).HasMaxLength(20);
+                entity.Property(e => e.ItemName).HasMaxLength(200);
+                entity.Property(e => e.Detail).HasMaxLength(100);
+                entity.HasOne(e => e.Trip).WithMany().HasForeignKey(e => e.TripId).OnDelete(DeleteBehavior.Cascade);
+                entity.HasOne(e => e.Actor).WithMany().HasForeignKey(e => e.ActorId).OnDelete(DeleteBehavior.Cascade);
             });
 
             modelBuilder.Entity<JournalLike>(entity =>
