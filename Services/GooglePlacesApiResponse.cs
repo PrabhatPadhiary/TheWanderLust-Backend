@@ -181,6 +181,19 @@ namespace TheWanderLustWebAPI.Services
     {
         [JsonPropertyName("location")]
         public GoogleLocation Location { get; set; }
+
+        // The area the place covers (a city, a country), on details lookups.
+        [JsonPropertyName("viewport")]
+        public GoogleViewport Viewport { get; set; }
+    }
+
+    internal class GoogleViewport
+    {
+        [JsonPropertyName("northeast")]
+        public GoogleLocation Northeast { get; set; }
+
+        [JsonPropertyName("southwest")]
+        public GoogleLocation Southwest { get; set; }
     }
 
     internal class GoogleLocation

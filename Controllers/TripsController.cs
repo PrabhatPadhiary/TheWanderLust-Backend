@@ -96,6 +96,12 @@ namespace TheWanderLustWebAPI.Controllers
                     .SelectMany(d => d.Places)
                     .Select(p => p.PlaceId)
                     .ToList(),
+                // Where each stop is, so "Add to trip" can list trips near a
+                // place first and notice a place far from every stop.
+                Stops = t.Destinations
+                    .Where(d => d.Latitude != null && d.Longitude != null)
+                    .Select(d => new { d.Latitude, d.Longitude })
+                    .ToList(),
                 // Small member summary for list cards (avatars): the total, plus
                 // the first few names with the owner first. Full member details
                 // stay on GET /api/Trips/{id}.

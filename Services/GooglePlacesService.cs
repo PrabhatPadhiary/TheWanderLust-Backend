@@ -38,31 +38,16 @@ namespace TheWanderLustWebAPI.Services
             if (string.IsNullOrWhiteSpace(filter))
                 throw new ArgumentException("Filter cannot be null or empty.", nameof(filter));
 
-            var filterCacheKey = $"destinations_filter_{placeId}_{filter.ToLowerInvariant()}";
+            var filterCacheKey = $"destinations_filter_{AreaCacheVersion}_{placeId}_{filter.ToLowerInvariant()}";
             if (_cache.TryGetValue(filterCacheKey, out List<PlaceDto> cachedFilterResult))
                 return cachedFilterResult;
 
-            // Get the place name from the main search cache, or fetch it
-            var mainCacheKey = $"destinations_{placeId}";
-            string placeName;
-            if (_cache.TryGetValue(mainCacheKey, out PlaceCategoriesResponseDto cachedMain))
-            {
-                placeName = cachedMain.Name;
-            }
-            else
-            {
-                var detailsUrl = $"{_settings.BaseUrl}/details/json?place_id={placeId}&fields=name&key={_settings.ApiKey}";
-                var detailsResponse = await _httpClient.GetAsync(detailsUrl, cancellationToken);
-                detailsResponse.EnsureSuccessStatusCode();
-                var placeDetails = await detailsResponse.Content.ReadFromJsonAsync<GooglePlacesApiResponse>(cancellationToken: cancellationToken);
-                placeName = placeDetails?.Result?.Name;
-            }
-
-            if (string.IsNullOrWhiteSpace(placeName))
+            var area = await ResolveDestinationAsync(placeId, cancellationToken);
+            if (string.IsNullOrWhiteSpace(area?.Name))
                 return new List<PlaceDto>();
 
-            var query = $"top {filter} in {placeName}";
-            var results = await TextSearchPlaces(query, cancellationToken);
+            var query = $"top {filter} in {area.Name}";
+            var results = await TextSearchPlaces(query, cancellationToken, area: area);
 
             _cache.Set(filterCacheKey, results, CacheDuration);
             return results;
@@ -85,32 +70,111 @@ namespace TheWanderLustWebAPI.Services
             if (!CategoryQueryMap.TryGetValue(category?.Trim() ?? "", out var queryTemplate))
                 throw new ArgumentException($"Invalid category '{category}'. Valid values: restaurants, stays, attractions, activities.");
 
-            var cacheKey = $"destinations_category_{placeId}_{category.ToLowerInvariant()}";
+            var cacheKey = $"destinations_category_{AreaCacheVersion}_{placeId}_{category.ToLowerInvariant()}";
             if (_cache.TryGetValue(cacheKey, out List<PlaceDto> cached))
                 return cached;
 
-            var placeName = await ResolvePlaceNameAsync(placeId, cancellationToken);
-            if (string.IsNullOrWhiteSpace(placeName))
+            var area = await ResolveDestinationAsync(placeId, cancellationToken);
+            if (string.IsNullOrWhiteSpace(area?.Name))
                 return new List<PlaceDto>();
 
-            var query = string.Format(queryTemplate, placeName);
-            var results = await TextSearchPlaces(query, cancellationToken);
+            var query = string.Format(queryTemplate, area.Name);
+            var results = await TextSearchPlaces(query, cancellationToken, area: area);
 
             _cache.Set(cacheKey, results, CacheDuration);
             return results;
         }
 
-        private async Task<string> ResolvePlaceNameAsync(string placeId, CancellationToken cancellationToken)
-        {
-            var mainCacheKey = $"destinations_{placeId}";
-            if (_cache.TryGetValue(mainCacheKey, out PlaceCategoriesResponseDto cachedMain))
-                return cachedMain.Name;
+        // ── Keeping a destination's lists inside the destination ──
+        // Text Search matches names too: "best restaurants in Tokyo" can bring
+        // back a popular "Tokyo ..." restaurant in Bengaluru. So searches for a
+        // destination are biased to where it is, and anything outside its area
+        // (Google's viewport for it, padded for places just over the edge) is
+        // dropped. Bumping the version refreshes cached lists after a change.
+        private const string AreaCacheVersion = "a1";
 
-            var detailsUrl = $"{_settings.BaseUrl}/details/json?place_id={placeId}&fields=name&key={_settings.ApiKey}";
+        // A destination's name, centre and the box it covers (null when unknown).
+        private sealed record DestinationArea(
+            string Name, double? Lat, double? Lng,
+            double? South, double? West, double? North, double? East);
+
+        private async Task<DestinationArea> ResolveDestinationAsync(string placeId, CancellationToken cancellationToken)
+        {
+            var cacheKey = $"destination_area_{placeId}";
+            if (_cache.TryGetValue(cacheKey, out DestinationArea cachedArea))
+                return cachedArea;
+
+            var detailsUrl = $"{_settings.BaseUrl}/details/json?place_id={Uri.EscapeDataString(placeId)}&fields=name,geometry&key={_settings.ApiKey}";
             var detailsResponse = await _httpClient.GetAsync(detailsUrl, cancellationToken);
             detailsResponse.EnsureSuccessStatusCode();
-            var placeDetails = await detailsResponse.Content.ReadFromJsonAsync<GooglePlacesApiResponse>(cancellationToken: cancellationToken);
-            return placeDetails?.Result?.Name;
+            var details = await detailsResponse.Content.ReadFromJsonAsync<GooglePlacesApiResponse>(cancellationToken: cancellationToken);
+            var result = details?.Result;
+            if (string.IsNullOrWhiteSpace(result?.Name))
+                return null;
+
+            var location = result.Geometry?.Location;
+            var viewport = result.Geometry?.Viewport;
+            var area = new DestinationArea(
+                result.Name,
+                location?.Lat, location?.Lng,
+                viewport?.Southwest?.Lat, viewport?.Southwest?.Lng,
+                viewport?.Northeast?.Lat, viewport?.Northeast?.Lng);
+
+            _cache.Set(cacheKey, area, CacheDuration);
+            return area;
+        }
+
+        private static double DistanceKm(double lat1, double lng1, double lat2, double lng2)
+        {
+            static double Rad(double d) => d * Math.PI / 180;
+            var dLat = Rad(lat2 - lat1);
+            var dLng = Rad(lng2 - lng1);
+            var h = Math.Pow(Math.Sin(dLat / 2), 2)
+                + Math.Cos(Rad(lat1)) * Math.Cos(Rad(lat2)) * Math.Pow(Math.Sin(dLng / 2), 2);
+            return 2 * 6371 * Math.Asin(Math.Sqrt(h));
+        }
+
+        // Google's location bias: the destination's centre and (at most 50 km,
+        // Google's limit) the distance to its corner.
+        private static string AreaBias(DestinationArea area)
+        {
+            if (area?.Lat == null || area.Lng == null)
+                return "";
+            var radiusKm = 50.0;
+            if (area.North != null && area.East != null)
+                radiusKm = Math.Clamp(DistanceKm(area.Lat.Value, area.Lng.Value, area.North.Value, area.East.Value), 5, 50);
+            return FormattableString.Invariant($"&location={area.Lat.Value},{area.Lng.Value}&radius={(int)(radiusKm * 1000)}");
+        }
+
+        // Whether a result is inside the destination: its viewport padded by a
+        // quarter of its size (at least ~25 km), else within 60 km of its centre.
+        private static bool InArea(DestinationArea area, GoogleTextSearchResult r)
+        {
+            var at = r.Geometry?.Location;
+            if (area == null || at == null)
+                return true;
+
+            if (area.South != null && area.North != null && area.West != null && area.East != null)
+            {
+                const double minPad = 0.25; // degrees, ~25 km
+                var latPad = Math.Max(minPad, (area.North.Value - area.South.Value) * 0.25);
+                if (at.Lat < area.South.Value - latPad || at.Lat > area.North.Value + latPad)
+                    return false;
+
+                var west = area.West.Value;
+                var east = area.East.Value;
+                // A box across the 180th meridian (Fiji): measure across it.
+                var width = east >= west ? east - west : east + 360 - west;
+                var lngPad = Math.Max(minPad, width * 0.25);
+                if (width + 2 * lngPad >= 360)
+                    return true;
+                var offset = ((at.Lng - (west - lngPad)) % 360 + 360) % 360;
+                return offset <= width + 2 * lngPad;
+            }
+
+            if (area.Lat != null && area.Lng != null)
+                return DistanceKm(area.Lat.Value, area.Lng.Value, at.Lat, at.Lng) <= 60;
+            return true;
         }
 
         // Supported home-screen themes. Queries are intentionally broad so Text
@@ -266,10 +330,11 @@ namespace TheWanderLustWebAPI.Services
             return results;
         }
 
-        private async Task<List<PlaceDto>> TextSearchPlaces(string query, CancellationToken cancellationToken, double? lat = null, double? lng = null)
+        private async Task<List<PlaceDto>> TextSearchPlaces(string query, CancellationToken cancellationToken, double? lat = null, double? lng = null, DestinationArea area = null)
         {
             var encodedQuery = Uri.EscapeDataString(query);
             var url = $"{_settings.BaseUrl}/textsearch/json?query={encodedQuery}&language=en&key={_settings.ApiKey}";
+            url += AreaBias(area);
 
             // Optional location bias: Text Search still returns strong results
             // beyond the radius, so this nudges toward the user's region without
@@ -285,16 +350,17 @@ namespace TheWanderLustWebAPI.Services
             response.EnsureSuccessStatusCode();
 
             var content = await response.Content.ReadFromJsonAsync<GoogleTextSearchResponse>(cancellationToken: cancellationToken);
-            return MapTextSearchResults(content);
+            return MapTextSearchResults(content, area);
         }
 
         // Curated lists (the destination page preview): well-known places only.
-        private List<PlaceDto> MapTextSearchResults(GoogleTextSearchResponse response)
+        private List<PlaceDto> MapTextSearchResults(GoogleTextSearchResponse response, DestinationArea area = null)
         {
             if (response?.Results == null)
                 return new List<PlaceDto>();
 
             return response.Results
+                .Where(r => InArea(area, r))
                 .Where(r => r.Rating >= 4.0 && r.UserRatingsTotal >= 500)
                 .OrderByDescending(PlaceScore)
                 .Take(8)
@@ -344,7 +410,8 @@ namespace TheWanderLustWebAPI.Services
                 throw new ArgumentException("Place ID cannot be null or empty.", nameof(placeId));
             page = Math.Clamp(page, 0, MaxPages - 1);
 
-            var placeName = await ResolvePlaceNameAsync(placeId, cancellationToken);
+            var area = await ResolveDestinationAsync(placeId, cancellationToken);
+            var placeName = area?.Name;
             if (string.IsNullOrWhiteSpace(placeName))
                 return new PagedPlacesDto { Page = page };
 
@@ -358,17 +425,18 @@ namespace TheWanderLustWebAPI.Services
             else
                 throw new ArgumentException("Give a query, a filter or a category (restaurants, stays, attractions, activities).");
 
-            var key = $"destinations_paged_{placeId}_{text.ToLowerInvariant()}";
+            var key = $"destinations_paged_{AreaCacheVersion}_{placeId}_{text.ToLowerInvariant()}";
             if (_cache.TryGetValue($"{key}_p{page}", out PagedPlacesDto cachedPage))
                 return cachedPage;
 
-            var response = await FetchTextSearchPage(text, key, page, cancellationToken);
+            var response = await FetchTextSearchPage(text, key, page, area, cancellationToken);
             var result = new PagedPlacesDto
             {
                 Page = page,
                 // Light quality bar: hide unrated and barely-reviewed places,
                 // but keep smaller, newer ones the curated lists leave out.
                 Places = (response?.Results ?? new List<GoogleTextSearchResult>())
+                    .Where(r => InArea(area, r))
                     .Where(r => (r.Rating ?? 0) >= 3.8 && (r.UserRatingsTotal ?? 0) >= 20)
                     .OrderByDescending(PlaceScore)
                     .Select(ToPlaceDto)
@@ -384,12 +452,12 @@ namespace TheWanderLustWebAPI.Services
 
         // Raw page `page` of a text search. Pages after the first need the
         // token from the page before, so a missing token re-fetches that page.
-        private async Task<GoogleTextSearchResponse> FetchTextSearchPage(string text, string key, int page, CancellationToken cancellationToken)
+        private async Task<GoogleTextSearchResponse> FetchTextSearchPage(string text, string key, int page, DestinationArea area, CancellationToken cancellationToken)
         {
             string token = null;
             if (page > 0 && !_cache.TryGetValue($"{key}_t{page}", out token))
             {
-                var previous = await FetchTextSearchPage(text, key, page - 1, cancellationToken);
+                var previous = await FetchTextSearchPage(text, key, page - 1, area, cancellationToken);
                 token = previous?.NextPageToken;
                 if (string.IsNullOrEmpty(token))
                     return new GoogleTextSearchResponse { Results = new List<GoogleTextSearchResult>() };
@@ -397,7 +465,8 @@ namespace TheWanderLustWebAPI.Services
 
             // Later pages must repeat the original parameters (query and
             // language) alongside the token, or Google answers INVALID_REQUEST.
-            var url = $"{_settings.BaseUrl}/textsearch/json?query={Uri.EscapeDataString(text)}&language=en&key={_settings.ApiKey}";
+            var url = $"{_settings.BaseUrl}/textsearch/json?query={Uri.EscapeDataString(text)}&language=en&key={_settings.ApiKey}"
+                + AreaBias(area);
             if (page > 0)
                 url += $"&pagetoken={Uri.EscapeDataString(token)}";
 
