@@ -16,11 +16,13 @@ namespace TheWanderLustWebAPI.Services
     public class TripNotifier
     {
         private readonly AppDbContext _dbContext;
+        private readonly NotificationQueueSignal _signal;
         private readonly ILogger<TripNotifier> _logger;
 
-        public TripNotifier(AppDbContext dbContext, ILogger<TripNotifier> logger)
+        public TripNotifier(AppDbContext dbContext, NotificationQueueSignal signal, ILogger<TripNotifier> logger)
         {
             _dbContext = dbContext;
+            _signal = signal;
             _logger = logger;
         }
 
@@ -64,6 +66,7 @@ namespace TheWanderLustWebAPI.Services
                     CreatedAt = DateTime.UtcNow,
                 });
                 await _dbContext.SaveChangesAsync();
+                _signal.Wake(); // the worker works out when to send it
             }
             catch (Exception ex)
             {

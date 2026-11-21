@@ -14,59 +14,92 @@ namespace TheWanderLustWebAPI.Services
     ///
     /// The queue is in the database, so a restart doesn't lose anything: what
     /// was waiting is sent once the server is back.
+    ///
+    /// No polling: the worker sleeps until a change is queued
+    /// (<see cref="NotificationQueueSignal"/>) or the next group is due, so an
+    /// idle app doesn't touch the database (and Neon can sleep).
     /// </summary>
     public class NotificationDigestWorker : BackgroundService
     {
         public static readonly TimeSpan QuietFor = TimeSpan.FromMinutes(5);
         public static readonly TimeSpan HoldAtMost = TimeSpan.FromMinutes(10);
-        private static readonly TimeSpan Tick = TimeSpan.FromSeconds(20);
         /// <summary>Changes older than this are dropped instead of sent (e.g. after a long outage).</summary>
         private static readonly TimeSpan TooOld = TimeSpan.FromDays(1);
+        /// <summary>The bell keeps this much history (cleaned at most daily, while awake anyway).</summary>
+        private static readonly TimeSpan KeepInBell = TimeSpan.FromDays(60);
+        private static readonly TimeSpan CleanupEvery = TimeSpan.FromDays(1);
+        /// <summary>Longest sleep with nothing queued (just so the daily cleanup still happens).</summary>
+        private static readonly TimeSpan IdleSleep = TimeSpan.FromDays(1);
+        private static readonly TimeSpan RetryAfterError = TimeSpan.FromMinutes(1);
+        private DateTime _lastCleanup = DateTime.MinValue;
 
         private readonly IServiceScopeFactory _scopes;
+        private readonly NotificationQueueSignal _signal;
         private readonly ILogger<NotificationDigestWorker> _logger;
 
-        public NotificationDigestWorker(IServiceScopeFactory scopes, ILogger<NotificationDigestWorker> logger)
+        public NotificationDigestWorker(IServiceScopeFactory scopes, NotificationQueueSignal signal,
+            ILogger<NotificationDigestWorker> logger)
         {
             _scopes = scopes;
+            _signal = signal;
             _logger = logger;
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
-            using var timer = new PeriodicTimer(Tick);
-            do
+            // Once at start (anything queued before a restart), then only when
+            // woken by a new change or when the next group is due.
+            while (!stoppingToken.IsCancellationRequested)
             {
+                TimeSpan sleep;
                 try
                 {
-                    await SendDueAsync(stoppingToken);
+                    sleep = await SendDueAsync(stoppingToken) ?? IdleSleep;
                 }
                 catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
                 {
                     _logger.LogWarning(ex, "Push: sending queued notifications failed; will retry");
+                    sleep = RetryAfterError;
                 }
-            } while (await timer.WaitForNextTickAsync(stoppingToken));
+
+                try
+                {
+                    await _signal.WaitAsync(sleep, stoppingToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+            }
         }
 
-        private async Task SendDueAsync(CancellationToken ct)
+        /// <summary>Sends what's due; returns how long until the next group is due (null: queue empty).</summary>
+        private async Task<TimeSpan?> SendDueAsync(CancellationToken ct)
         {
             using var scope = _scopes.CreateScope();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            var push = scope.ServiceProvider.GetRequiredService<PushService>();
+            var sender = scope.ServiceProvider.GetRequiredService<NotificationSender>();
 
             var now = DateTime.UtcNow;
             await db.PendingNotifications.Where(p => p.CreatedAt < now - TooOld).ExecuteDeleteAsync(ct);
+            if (now - _lastCleanup > CleanupEvery)
+            {
+                _lastCleanup = now;
+                await db.UserNotifications.Where(n => n.CreatedAt < now - KeepInBell).ExecuteDeleteAsync(ct);
+            }
 
             var pending = await db.PendingNotifications.AsNoTracking().OrderBy(p => p.CreatedAt).ToListAsync(ct);
-            if (pending.Count == 0) return;
+            if (pending.Count == 0) return null;
 
-            var due = pending
-                .GroupBy(p => (p.TripId, p.ActorId, p.Kind))
-                .Where(g => g.Key.Kind == NotificationKinds.Joined
-                    || g.Max(p => p.CreatedAt) <= now - QuietFor
-                    || g.Min(p => p.CreatedAt) <= now - HoldAtMost)
-                .ToList();
-            if (due.Count == 0) return;
+            var groups = pending.GroupBy(p => (p.TripId, p.ActorId, p.Kind)).ToList();
+            var due = groups.Where(g => DueAt(g.Key.Kind, g) <= now).ToList();
+
+            // When the earliest group still waiting is due (a little after, so it's surely due then).
+            var waiting = groups.Except(due).Select(g => DueAt(g.Key.Kind, g)).ToList();
+            TimeSpan? next = waiting.Count == 0
+                ? null
+                : waiting.Min() - now + TimeSpan.FromSeconds(1);
+            if (due.Count == 0) return next;
 
             var tripIds = due.Select(g => g.Key.TripId).Distinct().ToList();
             var actorIds = due.Select(g => g.Key.ActorId).Distinct().ToList();
@@ -88,20 +121,25 @@ namespace TheWanderLustWebAPI.Services
                     var actorName = FirstName(actors.GetValueOrDefault(group.Key.ActorId));
                     var body = Compose(group.Key.Kind, actorName, items);
                     if (recipients.Count > 0 && body != null)
-                    {
-                        await push.SendToUsersAsync(recipients, trip.Name, body, new
-                        {
-                            type = group.Key.Kind,
-                            tripId = trip.Id,
-                            tripName = trip.Name,
-                        });
-                    }
+                        await sender.SendAsync(recipients, trip.Id, group.Key.ActorId, group.Key.Kind, trip.Name, body);
                 }
 
                 // Sent (or nobody left to tell): done with these.
                 var ids = items.Select(p => p.Id).ToList();
                 await db.PendingNotifications.Where(p => ids.Contains(p.Id)).ExecuteDeleteAsync(ct);
             }
+            return next;
+        }
+
+        /// <summary>When a group goes out: joins at once; others once quiet, or at the latest HoldAtMost after the first.</summary>
+        private static DateTime DueAt(string kind, IEnumerable<PendingNotification> items)
+        {
+            if (kind == NotificationKinds.Joined) return DateTime.MinValue;
+            var first = items.Min(p => p.CreatedAt);
+            var last = items.Max(p => p.CreatedAt);
+            var quiet = last + QuietFor;
+            var cap = first + HoldAtMost;
+            return quiet < cap ? quiet : cap;
         }
 
         /// <summary>The notification's text, e.g. "Satish added 3 places: Burj Khalifa, Dubai Mall and 1 more".</summary>

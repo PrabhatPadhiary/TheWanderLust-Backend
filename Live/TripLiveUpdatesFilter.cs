@@ -31,6 +31,7 @@ namespace TheWanderLustWebAPI.Live
             ["TripChecklist"] = "checklist",
             ["TripMembers"] = "travellers",
             ["Invitations"] = "travellers",
+            ["TripAnnouncements"] = "announcements",
         };
 
         // Changes nobody else needs to see (creating a trip, managing invite links).

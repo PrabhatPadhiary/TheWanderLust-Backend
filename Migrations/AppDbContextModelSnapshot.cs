@@ -529,6 +529,37 @@ namespace TheWanderLustWebAPI.Migrations
                     b.ToTable("Trips");
                 });
 
+            modelBuilder.Entity("TheWanderLustWebAPI.Models.TripAnnouncement", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("AuthorId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("EditedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Text")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<Guid>("TripId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AuthorId");
+
+                    b.HasIndex("TripId", "CreatedAt");
+
+                    b.ToTable("TripAnnouncements");
+                });
+
             modelBuilder.Entity("TheWanderLustWebAPI.Models.TripChecklistItem", b =>
                 {
                     b.Property<Guid>("Id")
@@ -808,6 +839,50 @@ namespace TheWanderLustWebAPI.Migrations
                     b.ToTable("UserBlocks");
                 });
 
+            modelBuilder.Entity("TheWanderLustWebAPI.Models.UserNotification", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("ActorId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Body")
+                        .HasMaxLength(600)
+                        .HasColumnType("character varying(600)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("ReadAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Title")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<Guid?>("TripId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Type")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ActorId");
+
+                    b.HasIndex("TripId");
+
+                    b.HasIndex("UserId", "CreatedAt");
+
+                    b.ToTable("UserNotifications");
+                });
+
             modelBuilder.Entity("TheWanderLustWebAPI.Models.Favourite", b =>
                 {
                     b.HasOne("TheWanderLustWebAPI.Models.User", "User")
@@ -1020,6 +1095,24 @@ namespace TheWanderLustWebAPI.Migrations
                     b.Navigation("User");
                 });
 
+            modelBuilder.Entity("TheWanderLustWebAPI.Models.TripAnnouncement", b =>
+                {
+                    b.HasOne("TheWanderLustWebAPI.Models.User", "Author")
+                        .WithMany()
+                        .HasForeignKey("AuthorId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("TheWanderLustWebAPI.Models.Trip", "Trip")
+                        .WithMany()
+                        .HasForeignKey("TripId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Author");
+
+                    b.Navigation("Trip");
+                });
+
             modelBuilder.Entity("TheWanderLustWebAPI.Models.TripChecklistItem", b =>
                 {
                     b.HasOne("TheWanderLustWebAPI.Models.User", "AssignedToUser")
@@ -1122,6 +1215,31 @@ namespace TheWanderLustWebAPI.Migrations
                     b.Navigation("Blocked");
 
                     b.Navigation("Blocker");
+                });
+
+            modelBuilder.Entity("TheWanderLustWebAPI.Models.UserNotification", b =>
+                {
+                    b.HasOne("TheWanderLustWebAPI.Models.User", "Actor")
+                        .WithMany()
+                        .HasForeignKey("ActorId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("TheWanderLustWebAPI.Models.Trip", "Trip")
+                        .WithMany()
+                        .HasForeignKey("TripId")
+                        .OnDelete(DeleteBehavior.Cascade);
+
+                    b.HasOne("TheWanderLustWebAPI.Models.User", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Actor");
+
+                    b.Navigation("Trip");
+
+                    b.Navigation("User");
                 });
 
             modelBuilder.Entity("TheWanderLustWebAPI.Models.Journal", b =>

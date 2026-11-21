@@ -60,7 +60,9 @@ builder.Services.AddSingleton<CloudinaryService>();
 // Push notifications (Expo push service): phones register their token, trip
 // changes are queued by TripNotifier and sent grouped by the background worker.
 builder.Services.AddHttpClient<PushService>(c => c.Timeout = TimeSpan.FromSeconds(15));
+builder.Services.AddSingleton<NotificationQueueSignal>();
 builder.Services.AddScoped<TripNotifier>();
+builder.Services.AddScoped<NotificationSender>();
 builder.Services.AddHostedService<NotificationDigestWorker>();
 
 builder.Services.AddControllers(options =>

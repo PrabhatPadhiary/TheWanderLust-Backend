@@ -7,8 +7,9 @@ using TheWanderLustWebAPI.Models;
 namespace TheWanderLustWebAPI.Controllers
 {
     /// <summary>
-    /// The phones that get your push notifications. The app registers its
-    /// token after sign-in (and on every start) and removes it on log out.
+    /// Your notifications: the phones that get them by push (the app registers
+    /// its token after sign-in and on every start, and removes it on log out),
+    /// and the in-app list behind the bell on Home.
     /// </summary>
     [ApiController]
     [Route("api/notifications")]
@@ -88,6 +89,83 @@ namespace TheWanderLustWebAPI.Controllers
             await _dbContext.PushTokens
                 .Where(t => t.Token == token && t.UserId == userId.Value)
                 .ExecuteDeleteAsync();
+            return NoContent();
+        }
+
+        // ── The bell ─────────────────────────────────────────────────────
+
+        /// <summary>
+        /// Your notifications, newest first. Pages: pass the last one's
+        /// createdAt as `before` for the next page.
+        /// </summary>
+        [HttpGet]
+        public async Task<IActionResult> List([FromQuery] DateTime? before, [FromQuery] int limit = 30)
+        {
+            var userId = await GetCurrentUserId();
+            if (userId == null)
+                return Unauthorized();
+
+            limit = Math.Clamp(limit, 1, 50);
+            var query = _dbContext.UserNotifications.Where(n => n.UserId == userId.Value);
+            if (before != null)
+            {
+                var cutoff = DateTime.SpecifyKind(before.Value.ToUniversalTime(), DateTimeKind.Utc);
+                query = query.Where(n => n.CreatedAt < cutoff);
+            }
+
+            var items = await query
+                .OrderByDescending(n => n.CreatedAt)
+                .Take(limit)
+                .Select(n => new
+                {
+                    n.Id,
+                    n.Type,
+                    n.Title,
+                    n.Body,
+                    n.TripId,
+                    n.CreatedAt,
+                    IsRead = n.ReadAt != null,
+                    Actor = n.Actor == null ? null : new { n.Actor.Id, n.Actor.Name, n.Actor.PhotoUrl },
+                })
+                .ToListAsync();
+
+            return Ok(items);
+        }
+
+        /// <summary>How many are unread (the dot on the bell).</summary>
+        [HttpGet("unread-count")]
+        public async Task<IActionResult> UnreadCount()
+        {
+            var userId = await GetCurrentUserId();
+            if (userId == null)
+                return Unauthorized();
+
+            var count = await _dbContext.UserNotifications
+                .CountAsync(n => n.UserId == userId.Value && n.ReadAt == null);
+            return Ok(new { count });
+        }
+
+        public record MarkReadDto(DateTime? UpTo);
+
+        /// <summary>
+        /// Mark as read everything up to `upTo` (the newest one you've seen),
+        /// or everything when it's left out.
+        /// </summary>
+        [HttpPost("read")]
+        public async Task<IActionResult> MarkRead([FromBody] MarkReadDto? dto)
+        {
+            var userId = await GetCurrentUserId();
+            if (userId == null)
+                return Unauthorized();
+
+            var query = _dbContext.UserNotifications.Where(n => n.UserId == userId.Value && n.ReadAt == null);
+            if (dto?.UpTo != null)
+            {
+                var upTo = DateTime.SpecifyKind(dto.UpTo.Value.ToUniversalTime(), DateTimeKind.Utc);
+                query = query.Where(n => n.CreatedAt <= upTo);
+            }
+            var now = DateTime.UtcNow;
+            await query.ExecuteUpdateAsync(set => set.SetProperty(n => n.ReadAt, now));
             return NoContent();
         }
 
