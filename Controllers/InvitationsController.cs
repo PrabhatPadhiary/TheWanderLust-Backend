@@ -1,9 +1,11 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using TheWanderLustWebAPI.Context;
 using TheWanderLustWebAPI.Models;
 using TheWanderLustWebAPI.Models.Dtos;
+using TheWanderLustWebAPI.Settings;
 
 namespace TheWanderLustWebAPI.Controllers
 {
@@ -102,6 +104,57 @@ namespace TheWanderLustWebAPI.Controllers
                     invitation.Trip.Description,
                     invitation.Trip.PrimaryDestination,
                     invitation.Trip.CoverPhotoUrl
+                }
+            });
+        }
+
+        /// <summary>
+        /// Public preview of an invite, before signing in: enough to know what
+        /// you're being asked to join (trip name, where and when, how many are
+        /// going, whose trip it is) and nothing private (no budget, members,
+        /// plans or description). Invite ids are random GUIDs.
+        /// </summary>
+        [HttpGet("join/{inviteId}/preview")]
+        [AllowAnonymous]
+        [EnableRateLimiting(RateLimits.Google)]
+        public async Task<IActionResult> GetInvitationPreview(Guid inviteId)
+        {
+            var invitation = await _dbContext.Invitations
+                .Include(i => i.Trip).ThenInclude(t => t.User)
+                .Include(i => i.Trip).ThenInclude(t => t.Destinations)
+                .Include(i => i.Trip).ThenInclude(t => t.Members)
+                .AsNoTracking()
+                .FirstOrDefaultAsync(i => i.Id == inviteId);
+
+            if (invitation == null)
+                return NotFound("Invitation not found.");
+
+            var problem = InvalidReason(invitation);
+            if (problem != null)
+                return BadRequest(problem);
+
+            var trip = invitation.Trip;
+            var stops = trip.Destinations.OrderBy(d => d.Order).ThenBy(d => d.CreatedAt).ToList();
+            var primary = stops.FirstOrDefault(d => d.Id == trip.PrimaryDestinationId) ?? stops.FirstOrDefault();
+            var ownerFirstName = (trip.User?.Name ?? "").Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+
+            return Ok(new
+            {
+                invitation.Id,
+                invitation.Role,
+                Trip = new
+                {
+                    trip.Id,
+                    trip.Name,
+                    trip.PrimaryDestination,
+                    trip.StartDate,
+                    trip.EndDate,
+                    StopNames = stops.Select(d => d.Name).ToList(),
+                    // For the cover photo: /api/Destinations/place-photo?placeId=
+                    PrimaryPlaceId = primary?.GooglePlaceId,
+                    TravellerCount = Math.Max(trip.Members.Count, 1),
+                    OwnerFirstName = ownerFirstName,
+                    OwnerPhotoUrl = trip.User?.PhotoUrl,
                 }
             });
         }
