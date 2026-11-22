@@ -14,10 +14,16 @@ namespace TheWanderLustWebAPI.Controllers
     public class FavouritesController : ControllerBase
     {
         private readonly AppDbContext _dbContext;
+        private readonly IGooglePlacesService _places;
 
-        public FavouritesController(AppDbContext dbContext)
+        // Older favourites have no city yet; each list request fills in up to
+        // this many (one Google lookup each, once per favourite, ever).
+        private const int CityBackfillPerRequest = 30;
+
+        public FavouritesController(AppDbContext dbContext, IGooglePlacesService places)
         {
             _dbContext = dbContext;
+            _places = places;
         }
 
         [HttpGet]
@@ -26,6 +32,8 @@ namespace TheWanderLustWebAPI.Controllers
             var userId = await GetCurrentUserId();
             if (userId == null)
                 return Unauthorized();
+
+            await FillMissingCities(userId.Value, HttpContext.RequestAborted);
 
             var favourites = await _dbContext.Favourites
                 .Where(f => f.UserId == userId.Value)
@@ -40,6 +48,7 @@ namespace TheWanderLustWebAPI.Controllers
                     f.UserRatingsTotal,
                     f.PhotoUrl,
                     f.Category,
+                    f.City,
                     f.CreatedAt
                 })
                 .ToListAsync();
@@ -74,13 +83,15 @@ namespace TheWanderLustWebAPI.Controllers
                 UserRatingsTotal = dto.UserRatingsTotal,
                 PhotoUrl = PlacePhotoLinks.StripKey(dto.PhotoUrl),
                 Category = dto.Category,
+                // Null if Google couldn't be reached; the next list request retries.
+                City = await _places.GetPlaceCity(dto.PlaceId, HttpContext.RequestAborted),
                 CreatedAt = DateTime.UtcNow
             };
 
             _dbContext.Favourites.Add(favourite);
             await _dbContext.SaveChangesAsync();
 
-            return Ok(new { favourite.Id, favourite.PlaceId, favourite.PlaceName });
+            return Ok(new { favourite.Id, favourite.PlaceId, favourite.PlaceName, favourite.City });
         }
 
         [HttpDelete("{placeId}")]
@@ -144,6 +155,38 @@ namespace TheWanderLustWebAPI.Controllers
             }
 
             return Ok(new { synced = newFavourites.Count });
+        }
+
+        /// <summary>
+        /// Look up the city of this user's favourites that don't have one yet
+        /// (saved before cities were stored, or when Google was unreachable).
+        /// </summary>
+        private async Task FillMissingCities(Guid userId, CancellationToken ct)
+        {
+            var missing = await _dbContext.Favourites
+                .Where(f => f.UserId == userId && f.City == null)
+                .OrderByDescending(f => f.CreatedAt)
+                .Take(CityBackfillPerRequest)
+                .ToListAsync(ct);
+            if (missing.Count == 0) return;
+
+            // A few lookups at a time; the DbContext is only touched afterwards.
+            using var gate = new SemaphoreSlim(4);
+            var cities = await Task.WhenAll(missing.Select(async f =>
+            {
+                await gate.WaitAsync(ct);
+                try { return await _places.GetPlaceCity(f.PlaceId, ct); }
+                finally { gate.Release(); }
+            }));
+
+            var changed = false;
+            for (var i = 0; i < missing.Count; i++)
+            {
+                if (cities[i] == null) continue; // lookup failed: try next time
+                missing[i].City = cities[i];
+                changed = true;
+            }
+            if (changed) await _dbContext.SaveChangesAsync(ct);
         }
 
         private async Task<Guid?> GetCurrentUserId()

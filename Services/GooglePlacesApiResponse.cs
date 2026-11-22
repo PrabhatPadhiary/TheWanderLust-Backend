@@ -2,6 +2,33 @@ using System.Text.Json.Serialization;
 
 namespace TheWanderLustWebAPI.Services
 {
+    internal class GoogleAddressResponse
+    {
+        [JsonPropertyName("status")]
+        public string Status { get; set; }
+
+        [JsonPropertyName("result")]
+        public GoogleAddressResult Result { get; set; }
+    }
+
+    internal class GoogleAddressResult
+    {
+        [JsonPropertyName("address_components")]
+        public List<GoogleAddressComponent> AddressComponents { get; set; }
+    }
+
+    internal class GoogleAddressComponent
+    {
+        [JsonPropertyName("long_name")]
+        public string LongName { get; set; }
+
+        [JsonPropertyName("short_name")]
+        public string ShortName { get; set; }
+
+        [JsonPropertyName("types")]
+        public List<string> Types { get; set; }
+    }
+
     internal class GooglePlacesApiResponse
     {
         [JsonPropertyName("status")]

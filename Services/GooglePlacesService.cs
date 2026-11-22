@@ -513,6 +513,62 @@ namespace TheWanderLustWebAPI.Services
             return dto;
         }
 
+        public async Task<string> GetPlaceCity(string placeId, CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(placeId)) return "";
+
+            var cacheKey = $"place_city_{placeId}";
+            if (_cache.TryGetValue(cacheKey, out string cachedCity))
+                return cachedCity;
+
+            try
+            {
+                // address_component only: the cheapest Place Details request.
+                var url = $"{_settings.BaseUrl}/details/json?place_id={Uri.EscapeDataString(placeId)}&fields=address_component&language=en&key={_settings.ApiKey}";
+                var response = await _httpClient.GetAsync(url, cancellationToken);
+                if (!response.IsSuccessStatusCode) return null;
+
+                var content = await response.Content.ReadFromJsonAsync<GoogleAddressResponse>(cancellationToken: cancellationToken);
+                string city;
+                if (content?.Status == "OK")
+                    city = CityFrom(content.Result?.AddressComponents);
+                else if (content?.Status is "NOT_FOUND" or "INVALID_REQUEST")
+                    city = ""; // the place is gone; don't keep asking
+                else
+                    return null; // quota / server trouble: try again later
+
+                _cache.Set(cacheKey, city, TimeSpan.FromDays(30));
+                return city;
+            }
+            catch (Exception) when (!cancellationToken.IsCancellationRequested)
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// The city from Google's address parts: the locality, else the UK-style
+        /// postal town, else the district / region. Tokyo's wards come back as
+        /// their own "cities", so they're folded into Tokyo.
+        /// </summary>
+        private static string CityFrom(List<GoogleAddressComponent> parts)
+        {
+            if (parts == null || parts.Count == 0) return "";
+            string Find(string type) =>
+                parts.FirstOrDefault(p => p.Types?.Contains(type) == true)?.LongName?.Trim() ?? "";
+
+            var country = parts.FirstOrDefault(p => p.Types?.Contains("country") == true)?.ShortName;
+            var region = Find("administrative_area_level_1");
+            if (country == "JP" && region == "Tokyo") return "Tokyo";
+
+            foreach (var type in new[] { "locality", "postal_town", "administrative_area_level_2", "administrative_area_level_1" })
+            {
+                var name = Find(type);
+                if (name.Length > 0) return name;
+            }
+            return "";
+        }
+
         private PlaceDetailsDto MapToPlaceDetailsDto(GooglePlaceDetailsResponse response)
         {
             var result = response?.Result;
