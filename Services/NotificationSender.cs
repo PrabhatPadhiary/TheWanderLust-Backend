@@ -22,10 +22,11 @@ namespace TheWanderLustWebAPI.Services
         }
 
         /// <param name="recipients">Who gets it (leave out whoever caused it).</param>
-        /// <param name="type">"joined", "places", "expenses", "itinerary", "announcement".</param>
-        /// <param name="title">Usually the trip's name.</param>
+        /// <param name="type">"joined", "places", "expenses", "itinerary", "announcement", "likes", "comment", "reply".</param>
+        /// <param name="title">The trip's name, or the story's title.</param>
+        /// <param name="journalId">The story, for likes / comments / replies (tapping opens it).</param>
         public async Task SendAsync(IEnumerable<Guid> recipients, Guid? tripId, Guid? actorId, string type,
-            string title, string body, string? pushTitle = null)
+            string title, string body, string? pushTitle = null, Guid? journalId = null)
         {
             var userIds = recipients.Distinct().ToList();
             if (userIds.Count == 0) return;
@@ -38,6 +39,7 @@ namespace TheWanderLustWebAPI.Services
                     Id = Guid.NewGuid(),
                     UserId = userId,
                     TripId = tripId,
+                    JournalId = journalId,
                     ActorId = actorId,
                     Type = type,
                     Title = Truncate(title, 200),
@@ -52,12 +54,10 @@ namespace TheWanderLustWebAPI.Services
                 _logger.LogWarning(ex, "Notifications: couldn't save to the bell");
             }
 
-            await _push.SendToUsersAsync(userIds, pushTitle ?? title, body, new
-            {
-                type,
-                tripId,
-                tripName = title,
-            });
+            object data = journalId != null
+                ? new { type, journalId, journalTitle = title }
+                : new { type, tripId, tripName = title };
+            await _push.SendToUsersAsync(userIds, pushTitle ?? title, body, data);
         }
 
         private static string Truncate(string s, int max) => s.Length <= max ? s : s[..(max - 1)] + "…";

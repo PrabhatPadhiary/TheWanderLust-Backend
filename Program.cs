@@ -62,6 +62,7 @@ builder.Services.AddSingleton<CloudinaryService>();
 builder.Services.AddHttpClient<PushService>(c => c.Timeout = TimeSpan.FromSeconds(15));
 builder.Services.AddSingleton<NotificationQueueSignal>();
 builder.Services.AddScoped<TripNotifier>();
+builder.Services.AddScoped<StoryNotifier>();
 builder.Services.AddScoped<NotificationSender>();
 builder.Services.AddHostedService<NotificationDigestWorker>();
 

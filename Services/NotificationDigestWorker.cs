@@ -12,6 +12,9 @@ namespace TheWanderLustWebAPI.Services
     /// "Satish added 6 places: ..."), or at the latest <see cref="HoldAtMost"/>
     /// after their first change. Joins go out straight away.
     ///
+    /// Likes on a story go the same way, grouped per story (everyone who liked
+    /// it meanwhile): "Satish and 4 others liked your story".
+    ///
     /// The queue is in the database, so a restart doesn't lose anything: what
     /// was waiting is sent once the server is back.
     ///
@@ -91,7 +94,12 @@ namespace TheWanderLustWebAPI.Services
             var pending = await db.PendingNotifications.AsNoTracking().OrderBy(p => p.CreatedAt).ToListAsync(ct);
             if (pending.Count == 0) return null;
 
-            var groups = pending.GroupBy(p => (p.TripId, p.ActorId, p.Kind)).ToList();
+            // Trip changes: per trip, person and kind. Likes: per story (everyone's together).
+            var groups = pending.GroupBy(p => (
+                p.TripId,
+                p.JournalId,
+                ActorId: p.Kind == NotificationKinds.Likes ? Guid.Empty : p.ActorId,
+                p.Kind)).ToList();
             var due = groups.Where(g => DueAt(g.Key.Kind, g) <= now).ToList();
 
             // When the earliest group still waiting is due (a little after, so it's surely due then).
@@ -101,12 +109,17 @@ namespace TheWanderLustWebAPI.Services
                 : waiting.Min() - now + TimeSpan.FromSeconds(1);
             if (due.Count == 0) return next;
 
-            var tripIds = due.Select(g => g.Key.TripId).Distinct().ToList();
-            var actorIds = due.Select(g => g.Key.ActorId).Distinct().ToList();
+            var tripIds = due.Where(g => g.Key.TripId != null).Select(g => g.Key.TripId!.Value).Distinct().ToList();
+            var journalIds = due.Where(g => g.Key.JournalId != null).Select(g => g.Key.JournalId!.Value).Distinct().ToList();
+            var actorIds = due.SelectMany(g => g.Select(p => p.ActorId)).Distinct().ToList();
             var trips = await db.Trips
                 .Where(t => tripIds.Contains(t.Id))
                 .Select(t => new { t.Id, t.Name, MemberIds = t.Members.Select(m => m.UserId).ToList() })
                 .ToDictionaryAsync(t => t.Id, ct);
+            var journals = await db.Journals
+                .Where(j => journalIds.Contains(j.Id) && j.Status == "published" && j.Visibility == "public")
+                .Select(j => new { j.Id, j.Title, j.UserId })
+                .ToDictionaryAsync(j => j.Id, ct);
             var actors = await db.Users
                 .Where(u => actorIds.Contains(u.Id))
                 .Select(u => new { u.Id, u.Name })
@@ -115,13 +128,31 @@ namespace TheWanderLustWebAPI.Services
             foreach (var group in due)
             {
                 var items = group.ToList();
-                if (trips.TryGetValue(group.Key.TripId, out var trip))
+                if (group.Key.TripId is Guid tripId && trips.TryGetValue(tripId, out var trip))
                 {
                     var recipients = trip.MemberIds.Where(id => id != group.Key.ActorId).ToList();
                     var actorName = FirstName(actors.GetValueOrDefault(group.Key.ActorId));
                     var body = Compose(group.Key.Kind, actorName, items);
                     if (recipients.Count > 0 && body != null)
                         await sender.SendAsync(recipients, trip.Id, group.Key.ActorId, group.Key.Kind, trip.Name, body);
+                }
+                else if (group.Key.JournalId is Guid journalId && journals.TryGetValue(journalId, out var journal)
+                         && group.Key.Kind == NotificationKinds.Likes)
+                {
+                    // Newest liker first (their photo on the bell row).
+                    var likers = items
+                        .OrderByDescending(p => p.CreatedAt)
+                        .Select(p => p.ActorId)
+                        .Where(id => id != journal.UserId)
+                        .Distinct()
+                        .ToList();
+                    if (likers.Count > 0)
+                    {
+                        var names = likers.Select(id => FirstName(actors.GetValueOrDefault(id))).ToList();
+                        var title = string.IsNullOrWhiteSpace(journal.Title) ? "Your story" : journal.Title.Trim();
+                        await sender.SendAsync(new[] { journal.UserId }, null, likers[0], NotificationKinds.Likes,
+                            title, StoryNotifier.ComposeLikes(names), journalId: journal.Id);
+                    }
                 }
 
                 // Sent (or nobody left to tell): done with these.

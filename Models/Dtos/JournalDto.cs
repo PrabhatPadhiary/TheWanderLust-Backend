@@ -48,5 +48,7 @@ namespace TheWanderLustWebAPI.Models.Dtos
     public class AddCommentDto
     {
         public string Body { get; set; }
+        /// <summary>Replying: the comment answered (a reply to a reply goes under the same top-level comment).</summary>
+        public Guid? ParentCommentId { get; set; }
     }
 }

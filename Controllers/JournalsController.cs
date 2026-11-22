@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using TheWanderLustWebAPI.Context;
 using TheWanderLustWebAPI.Models;
 using TheWanderLustWebAPI.Models.Dtos;
+using TheWanderLustWebAPI.Services;
 
 namespace TheWanderLustWebAPI.Controllers
 {
@@ -14,12 +15,15 @@ namespace TheWanderLustWebAPI.Controllers
         private readonly AppDbContext _dbContext;
         private readonly CloudinaryService _cloudinaryService;
         private readonly ILogger<JournalsController> _logger;
+        private readonly StoryNotifier _notifier;
 
-        public JournalsController(AppDbContext dbContext, CloudinaryService cloudinaryService, ILogger<JournalsController> logger)
+        public JournalsController(AppDbContext dbContext, CloudinaryService cloudinaryService, ILogger<JournalsController> logger,
+            StoryNotifier notifier)
         {
             _dbContext = dbContext;
             _cloudinaryService = cloudinaryService;
             _logger = logger;
+            _notifier = notifier;
         }
 
         /// <summary>
@@ -189,6 +193,8 @@ namespace TheWanderLustWebAPI.Controllers
                     j.Status,
                     j.LikesCount,
                     j.CommentsCount,
+                    // You can like your own stories too.
+                    IsLiked = _dbContext.JournalLikes.Any(l => l.JournalId == j.Id && l.UserId == userId.Value),
                     j.CreatedAt,
                     j.UpdatedAt,
                     j.PublishedAt,
@@ -250,6 +256,7 @@ namespace TheWanderLustWebAPI.Controllers
                 .Select(c => new
                 {
                     c.Id,
+                    c.ParentCommentId,
                     c.Body,
                     c.CreatedAt,
                     c.UpdatedAt,
@@ -884,6 +891,7 @@ namespace TheWanderLustWebAPI.Controllers
                 .Select(c => new
                 {
                     c.Id,
+                    c.ParentCommentId,
                     c.Body,
                     c.CreatedAt,
                     c.UpdatedAt,
@@ -912,11 +920,23 @@ namespace TheWanderLustWebAPI.Controllers
             if (userId == null)
                 return Unauthorized();
 
+            // A reply: always under a top-level comment (replies are one level deep).
+            JournalComment? parent = null;
+            if (dto.ParentCommentId != null)
+            {
+                parent = await _dbContext.JournalComments
+                    .FirstOrDefaultAsync(c => c.Id == dto.ParentCommentId.Value && c.JournalId == id);
+                if (parent == null)
+                    return NotFound("That comment was deleted.");
+            }
+            var topLevelId = parent?.ParentCommentId ?? parent?.Id;
+
             var comment = new JournalComment
             {
                 Id = Guid.NewGuid(),
                 JournalId = id,
                 UserId = userId.Value,
+                ParentCommentId = topLevelId,
                 Body = dto.Body.Trim(),
                 CreatedAt = DateTime.UtcNow
             };
@@ -926,10 +946,13 @@ namespace TheWanderLustWebAPI.Controllers
             await _dbContext.SaveChangesAsync();
 
             var user = await _dbContext.Users.FindAsync(userId.Value);
+            // Whoever wrote the comment being answered (a reply's own author when replying to a reply).
+            await _notifier.CommentAddedAsync(journal, comment, user?.Name, parent?.UserId);
 
             return Ok(new
             {
                 comment.Id,
+                comment.ParentCommentId,
                 comment.Body,
                 comment.CreatedAt,
                 comment.UpdatedAt,
@@ -972,7 +995,8 @@ namespace TheWanderLustWebAPI.Controllers
         }
 
         /// <summary>
-        /// Delete your own comment. Auth required.
+        /// Delete your own comment (its replies go with it). Auth required.
+        /// Returns how many comments went, replies included.
         /// </summary>
         [HttpDelete("{id}/comments/{commentId}")]
         [Authorize]
@@ -988,14 +1012,16 @@ namespace TheWanderLustWebAPI.Controllers
             if (comment == null)
                 return NotFound("Comment not found.");
 
+            // Its replies go too (the database cascades them).
+            var removed = 1 + await _dbContext.JournalComments.CountAsync(c => c.ParentCommentId == commentId);
             var journal = await _dbContext.Journals.FindAsync(id);
-            if (journal != null && journal.CommentsCount > 0)
-                journal.CommentsCount--;
+            if (journal != null)
+                journal.CommentsCount = Math.Max(0, journal.CommentsCount - removed);
 
             _dbContext.JournalComments.Remove(comment);
             await _dbContext.SaveChangesAsync();
 
-            return Ok(new { message = "Comment deleted." });
+            return Ok(new { message = "Comment deleted.", removed, commentsCount = journal?.CommentsCount ?? 0 });
         }
 
         // ─── Likes ───────────────────────────────────────────────────────────────
@@ -1026,6 +1052,7 @@ namespace TheWanderLustWebAPI.Controllers
                     journal.LikesCount--;
 
                 await _dbContext.SaveChangesAsync();
+                await _notifier.UnlikedAsync(id, userId.Value);
                 return Ok(new { liked = false, likesCount = journal.LikesCount });
             }
             else
@@ -1041,6 +1068,7 @@ namespace TheWanderLustWebAPI.Controllers
                 journal.LikesCount++;
 
                 await _dbContext.SaveChangesAsync();
+                await _notifier.LikedAsync(journal, userId.Value);
                 return Ok(new { liked = true, likesCount = journal.LikesCount });
             }
         }

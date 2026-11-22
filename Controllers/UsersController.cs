@@ -322,7 +322,11 @@ namespace TheWanderLustWebAPI.Controllers
                 foreach (var expense in expenses)
                     expense.PaidByName = FormerTraveller;
 
-                // 4. Their likes and comments on journals (no cascade from users).
+                // 4. Their likes and comments on journals (no cascade from users;
+                //    replies to their comments go with them).
+                var touchedJournals = await _dbContext.JournalLikes.Where(l => l.UserId == userId).Select(l => l.JournalId)
+                    .Union(_dbContext.JournalComments.Where(c => c.UserId == userId).Select(c => c.JournalId))
+                    .ToListAsync();
                 _dbContext.JournalLikes.RemoveRange(
                     _dbContext.JournalLikes.Where(l => l.UserId == userId));
                 _dbContext.JournalComments.RemoveRange(
@@ -332,6 +336,16 @@ namespace TheWanderLustWebAPI.Controllers
                 //    invitations they used and checklist assignments set null.
                 _dbContext.Users.Remove(user);
                 await _dbContext.SaveChangesAsync();
+
+                // Other people's stories they liked or commented on: recount.
+                if (touchedJournals.Count > 0)
+                {
+                    await _dbContext.Journals
+                        .Where(j => touchedJournals.Contains(j.Id))
+                        .ExecuteUpdateAsync(set => set
+                            .SetProperty(j => j.LikesCount, j => _dbContext.JournalLikes.Count(l => l.JournalId == j.Id))
+                            .SetProperty(j => j.CommentsCount, j => _dbContext.JournalComments.Count(c => c.JournalId == j.Id)));
+                }
                 await tx.CommitAsync();
             }
 

@@ -123,6 +123,7 @@ namespace TheWanderLustWebAPI.Controllers
                     n.Title,
                     n.Body,
                     n.TripId,
+                    n.JournalId,
                     n.CreatedAt,
                     IsRead = n.ReadAt != null,
                     Actor = n.Actor == null ? null : new { n.Actor.Id, n.Actor.Name, n.Actor.PhotoUrl },

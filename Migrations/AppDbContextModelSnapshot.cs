@@ -264,6 +264,9 @@ namespace TheWanderLustWebAPI.Migrations
                     b.Property<Guid>("JournalId")
                         .HasColumnType("uuid");
 
+                    b.Property<Guid?>("ParentCommentId")
+                        .HasColumnType("uuid");
+
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -273,6 +276,8 @@ namespace TheWanderLustWebAPI.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("JournalId");
+
+                    b.HasIndex("ParentCommentId");
 
                     b.HasIndex("UserId");
 
@@ -426,11 +431,14 @@ namespace TheWanderLustWebAPI.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)");
 
+                    b.Property<Guid?>("JournalId")
+                        .HasColumnType("uuid");
+
                     b.Property<string>("Kind")
                         .HasMaxLength(20)
                         .HasColumnType("character varying(20)");
 
-                    b.Property<Guid>("TripId")
+                    b.Property<Guid?>("TripId")
                         .HasColumnType("uuid");
 
                     b.HasKey("Id");
@@ -438,6 +446,8 @@ namespace TheWanderLustWebAPI.Migrations
                     b.HasIndex("ActorId");
 
                     b.HasIndex("CreatedAt");
+
+                    b.HasIndex("JournalId");
 
                     b.HasIndex("TripId");
 
@@ -855,6 +865,9 @@ namespace TheWanderLustWebAPI.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<Guid?>("JournalId")
+                        .HasColumnType("uuid");
+
                     b.Property<DateTime?>("ReadAt")
                         .HasColumnType("timestamp with time zone");
 
@@ -875,6 +888,8 @@ namespace TheWanderLustWebAPI.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("ActorId");
+
+                    b.HasIndex("JournalId");
 
                     b.HasIndex("TripId");
 
@@ -983,6 +998,11 @@ namespace TheWanderLustWebAPI.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
+                    b.HasOne("TheWanderLustWebAPI.Models.JournalComment", "ParentComment")
+                        .WithMany()
+                        .HasForeignKey("ParentCommentId")
+                        .OnDelete(DeleteBehavior.Cascade);
+
                     b.HasOne("TheWanderLustWebAPI.Models.User", "User")
                         .WithMany()
                         .HasForeignKey("UserId")
@@ -990,6 +1010,8 @@ namespace TheWanderLustWebAPI.Migrations
                         .IsRequired();
 
                     b.Navigation("Journal");
+
+                    b.Navigation("ParentComment");
 
                     b.Navigation("User");
                 });
@@ -1062,13 +1084,19 @@ namespace TheWanderLustWebAPI.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
+                    b.HasOne("TheWanderLustWebAPI.Models.Journal", "Journal")
+                        .WithMany()
+                        .HasForeignKey("JournalId")
+                        .OnDelete(DeleteBehavior.Cascade);
+
                     b.HasOne("TheWanderLustWebAPI.Models.Trip", "Trip")
                         .WithMany()
                         .HasForeignKey("TripId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.Cascade);
 
                     b.Navigation("Actor");
+
+                    b.Navigation("Journal");
 
                     b.Navigation("Trip");
                 });
@@ -1224,6 +1252,11 @@ namespace TheWanderLustWebAPI.Migrations
                         .HasForeignKey("ActorId")
                         .OnDelete(DeleteBehavior.SetNull);
 
+                    b.HasOne("TheWanderLustWebAPI.Models.Journal", "Journal")
+                        .WithMany()
+                        .HasForeignKey("JournalId")
+                        .OnDelete(DeleteBehavior.Cascade);
+
                     b.HasOne("TheWanderLustWebAPI.Models.Trip", "Trip")
                         .WithMany()
                         .HasForeignKey("TripId")
@@ -1236,6 +1269,8 @@ namespace TheWanderLustWebAPI.Migrations
                         .IsRequired();
 
                     b.Navigation("Actor");
+
+                    b.Navigation("Journal");
 
                     b.Navigation("Trip");
 

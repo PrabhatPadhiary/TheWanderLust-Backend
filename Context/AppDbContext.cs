@@ -224,7 +224,8 @@ namespace TheWanderLustWebAPI.Context
                 entity.Property(e => e.Change).HasMaxLength(20);
                 entity.Property(e => e.ItemName).HasMaxLength(200);
                 entity.Property(e => e.Detail).HasMaxLength(100);
-                entity.HasOne(e => e.Trip).WithMany().HasForeignKey(e => e.TripId).OnDelete(DeleteBehavior.Cascade);
+                entity.HasOne(e => e.Trip).WithMany().HasForeignKey(e => e.TripId).OnDelete(DeleteBehavior.Cascade).IsRequired(false);
+                entity.HasOne(e => e.Journal).WithMany().HasForeignKey(e => e.JournalId).OnDelete(DeleteBehavior.Cascade).IsRequired(false);
                 entity.HasOne(e => e.Actor).WithMany().HasForeignKey(e => e.ActorId).OnDelete(DeleteBehavior.Cascade);
             });
 
@@ -238,6 +239,7 @@ namespace TheWanderLustWebAPI.Context
                 entity.Property(e => e.Body).HasMaxLength(600);
                 entity.HasOne(e => e.User).WithMany().HasForeignKey(e => e.UserId).OnDelete(DeleteBehavior.Cascade);
                 entity.HasOne(e => e.Trip).WithMany().HasForeignKey(e => e.TripId).OnDelete(DeleteBehavior.Cascade).IsRequired(false);
+                entity.HasOne(e => e.Journal).WithMany().HasForeignKey(e => e.JournalId).OnDelete(DeleteBehavior.Cascade).IsRequired(false);
                 entity.HasOne(e => e.Actor).WithMany().HasForeignKey(e => e.ActorId).OnDelete(DeleteBehavior.SetNull).IsRequired(false);
             });
 
@@ -267,6 +269,12 @@ namespace TheWanderLustWebAPI.Context
             modelBuilder.Entity<JournalComment>(entity =>
             {
                 entity.HasKey(e => e.Id);
+                // Replies go with the comment they answer.
+                entity.HasOne(e => e.ParentComment)
+                    .WithMany()
+                    .HasForeignKey(e => e.ParentCommentId)
+                    .OnDelete(DeleteBehavior.Cascade)
+                    .IsRequired(false);
                 entity.HasOne(e => e.Journal)
                     .WithMany()
                     .HasForeignKey(e => e.JournalId)

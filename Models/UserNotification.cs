@@ -11,11 +11,13 @@ namespace TheWanderLustWebAPI.Models
         /// <summary>Whose bell it's in.</summary>
         public Guid UserId { get; set; }
         public Guid? TripId { get; set; }
+        /// <summary>The story, for likes / comments / replies (tapping opens it).</summary>
+        public Guid? JournalId { get; set; }
         /// <summary>Who did it (their photo on the row). Null once they deleted their account.</summary>
         public Guid? ActorId { get; set; }
-        /// <summary>"joined", "places", "expenses", "itinerary", "announcement".</summary>
+        /// <summary>"joined", "places", "expenses", "itinerary", "announcement", "likes", "comment", "reply".</summary>
         public string Type { get; set; }
-        /// <summary>Usually the trip's name.</summary>
+        /// <summary>The trip's name, or the story's title.</summary>
         public string Title { get; set; }
         public string Body { get; set; }
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
@@ -24,6 +26,7 @@ namespace TheWanderLustWebAPI.Models
 
         public User User { get; set; }
         public Trip? Trip { get; set; }
+        public Journal? Journal { get; set; }
         public User? Actor { get; set; }
     }
 }
