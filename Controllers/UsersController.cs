@@ -1,3 +1,4 @@
+using TheWanderLustWebAPI.Services;
 using FirebaseAdmin.Auth;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -115,6 +116,36 @@ namespace TheWanderLustWebAPI.Controllers
             var favourites = await _dbContext.Favourites.CountAsync(f => f.UserId == user.Id);
             var journals = await _dbContext.Journals.CountAsync(j => j.UserId == user.Id);
 
+            // ── Traveller rank (see TravellerRanks) ──
+            var today = DateTime.UtcNow.Date;
+            var rankTrips = await _dbContext.Trips
+                .Where(t => tripIds.Contains(t.Id) && t.Destinations.Any())
+                .Select(t => new { t.Id, t.EndDate, t.CreatedAt })
+                .ToListAsync();
+            // Taken: its dates have passed, and it was made before it ended
+            // (a trip back-dated after the fact doesn't count).
+            var takenIds = rankTrips
+                .Where(t => t.EndDate != null && t.EndDate.Value.Date < today && t.CreatedAt.Date <= t.EndDate.Value.Date)
+                .Select(t => t.Id)
+                .ToList();
+            var citiesVisited = takenIds.Count == 0 ? 0 : await _dbContext.TripDestinations
+                .Where(d => takenIds.Contains(d.TripId))
+                .Select(d => d.GooglePlaceId)
+                .Distinct()
+                .CountAsync();
+            // Shared stories: published, public, with at least one photo.
+            var shared = await _dbContext.Journals
+                .Where(j => j.UserId == user.Id && j.Status == "published" && j.Visibility == "public" && j.Photos.Any())
+                .Select(j => j.LikesCount)
+                .ToListAsync();
+            var rank = TravellerRanks.Compute(
+                tripsPlanned: rankTrips.Count,
+                tripsTaken: takenIds.Count,
+                cities: citiesVisited,
+                stories: shared.Count,
+                likes: shared.Sum(),
+                places: placesSaved);
+
             return Ok(new
             {
                 user.Id,
@@ -131,6 +162,33 @@ namespace TheWanderLustWebAPI.Controllers
                     PlacesSaved = placesSaved,
                     Favourites = favourites,
                     Journals = journals
+                },
+                Rank = new
+                {
+                    rank.Level,
+                    rank.Name,
+                    rank.Points,
+                    Counts = new
+                    {
+                        rank.TripsPlanned,
+                        rank.TripsTaken,
+                        rank.Cities,
+                        rank.Stories,
+                        rank.Likes,
+                        rank.Places
+                    },
+                    Ladder = TravellerRanks.Ladder,
+                    Earn = new
+                    {
+                        Story = TravellerRanks.StoryPoints,
+                        TripTaken = TravellerRanks.TripTakenPoints,
+                        TripPlanned = TravellerRanks.TripPlannedPoints,
+                        City = TravellerRanks.CityPoints,
+                        Like = TravellerRanks.LikePoints,
+                        LikeCap = TravellerRanks.LikePointsCap,
+                        Place = TravellerRanks.PlacePoints,
+                        PlaceCap = TravellerRanks.PlacePointsCap
+                    }
                 }
             });
         }
