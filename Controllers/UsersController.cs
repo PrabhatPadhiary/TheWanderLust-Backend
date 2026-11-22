@@ -153,6 +153,7 @@ namespace TheWanderLustWebAPI.Controllers
                 user.Email,
                 user.PhotoUrl,
                 user.CreatedAt,
+                IsModerator = ModerationService.IsModerator(user),
                 Stats = new
                 {
                     Trips = statuses.Count,

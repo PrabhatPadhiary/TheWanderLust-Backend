@@ -22,6 +22,45 @@ namespace TheWanderLustWebAPI.Migrations
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
+            modelBuilder.Entity("TheWanderLustWebAPI.Models.CommentReport", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("CommentId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Details")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)");
+
+                    b.Property<Guid>("ReporterId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Status")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ReporterId");
+
+                    b.HasIndex("Status");
+
+                    b.HasIndex("CommentId", "ReporterId")
+                        .IsUnique();
+
+                    b.ToTable("CommentReports");
+                });
+
             modelBuilder.Entity("TheWanderLustWebAPI.Models.Favourite", b =>
                 {
                     b.Property<Guid>("Id")
@@ -899,6 +938,25 @@ namespace TheWanderLustWebAPI.Migrations
                     b.HasIndex("UserId", "CreatedAt");
 
                     b.ToTable("UserNotifications");
+                });
+
+            modelBuilder.Entity("TheWanderLustWebAPI.Models.CommentReport", b =>
+                {
+                    b.HasOne("TheWanderLustWebAPI.Models.JournalComment", "Comment")
+                        .WithMany()
+                        .HasForeignKey("CommentId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("TheWanderLustWebAPI.Models.User", "Reporter")
+                        .WithMany()
+                        .HasForeignKey("ReporterId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Comment");
+
+                    b.Navigation("Reporter");
                 });
 
             modelBuilder.Entity("TheWanderLustWebAPI.Models.Favourite", b =>

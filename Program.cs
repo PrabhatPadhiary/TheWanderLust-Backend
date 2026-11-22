@@ -63,6 +63,7 @@ builder.Services.AddHttpClient<PushService>(c => c.Timeout = TimeSpan.FromSecond
 builder.Services.AddSingleton<NotificationQueueSignal>();
 builder.Services.AddScoped<TripNotifier>();
 builder.Services.AddScoped<StoryNotifier>();
+builder.Services.AddScoped<ModerationService>();
 builder.Services.AddScoped<NotificationSender>();
 builder.Services.AddHostedService<NotificationDigestWorker>();
 

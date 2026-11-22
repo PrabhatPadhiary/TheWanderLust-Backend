@@ -16,10 +16,12 @@ namespace TheWanderLustWebAPI.Controllers
         private readonly CloudinaryService _cloudinaryService;
         private readonly ILogger<JournalsController> _logger;
         private readonly StoryNotifier _notifier;
+        private readonly ModerationService _moderation;
 
         public JournalsController(AppDbContext dbContext, CloudinaryService cloudinaryService, ILogger<JournalsController> logger,
-            StoryNotifier notifier)
+            StoryNotifier notifier, ModerationService moderation)
         {
+            _moderation = moderation;
             _dbContext = dbContext;
             _cloudinaryService = cloudinaryService;
             _logger = logger;
@@ -799,6 +801,7 @@ namespace TheWanderLustWebAPI.Controllers
 
             var open = await _dbContext.JournalReports.CountAsync(r => r.JournalId == id && r.Status == "open");
             _logger.LogWarning("Story {JournalId} reported ({Reason}); {Open} open report(s) on it.", id, reason, open);
+            await _moderation.ReportedAsync("story", reason, userId.Value, journal.Title);
 
             return Ok(new { message = "Thanks, we'll take a look." });
         }
@@ -883,10 +886,18 @@ namespace TheWanderLustWebAPI.Controllers
                     return NotFound("Journal not found.");
             }
 
-            var (blockedUsers, _) = await ExclusionsFor(await GetCurrentUserId());
+            var viewerId = await GetCurrentUserId();
+            var (blockedUsers, _) = await ExclusionsFor(viewerId);
+            // Comments you reported are hidden from you (their replies too).
+            var reported = viewerId == null ? new List<Guid>() : await _dbContext.CommentReports
+                .Where(r => r.ReporterId == viewerId.Value && r.Comment.JournalId == id)
+                .Select(r => r.CommentId)
+                .ToListAsync();
             var comments = await _dbContext.JournalComments
                 .Include(c => c.User)
-                .Where(c => c.JournalId == id && !blockedUsers.Contains(c.UserId))
+                .Where(c => c.JournalId == id && !blockedUsers.Contains(c.UserId)
+                    && !reported.Contains(c.Id)
+                    && (c.ParentCommentId == null || !reported.Contains(c.ParentCommentId.Value)))
                 .OrderBy(c => c.CreatedAt)
                 .Select(c => new
                 {
@@ -1022,6 +1033,59 @@ namespace TheWanderLustWebAPI.Controllers
             await _dbContext.SaveChangesAsync();
 
             return Ok(new { message = "Comment deleted.", removed, commentsCount = journal?.CommentsCount ?? 0 });
+        }
+
+        /// <summary>
+        /// Report a comment or reply. One report per person per comment
+        /// (reporting again updates it). The comment is hidden from the reporter.
+        /// </summary>
+        [HttpPost("{id}/comments/{commentId}/report")]
+        [Authorize]
+        public async Task<IActionResult> ReportComment(Guid id, Guid commentId, [FromBody] ReportJournalDto dto)
+        {
+            var userId = await GetCurrentUserId();
+            if (userId == null)
+                return Unauthorized();
+            var reason = (dto?.Reason ?? "").Trim().ToLowerInvariant();
+            if (!ReportReasons.Contains(reason))
+                return BadRequest("Pick a reason: spam, inappropriate, harassment, false_info or other.");
+
+            var comment = await _dbContext.JournalComments
+                .FirstOrDefaultAsync(c => c.Id == commentId && c.JournalId == id);
+            if (comment == null)
+                return NotFound("That comment was deleted.");
+            if (comment.UserId == userId.Value)
+                return BadRequest("You can't report your own comment.");
+
+            var details = string.IsNullOrWhiteSpace(dto?.Details) ? null : dto.Details.Trim();
+            if (details?.Length > 500) details = details[..500];
+
+            var report = await _dbContext.CommentReports
+                .FirstOrDefaultAsync(r => r.CommentId == commentId && r.ReporterId == userId.Value);
+            if (report == null)
+            {
+                _dbContext.CommentReports.Add(new CommentReport
+                {
+                    Id = Guid.NewGuid(),
+                    CommentId = commentId,
+                    ReporterId = userId.Value,
+                    Reason = reason,
+                    Details = details,
+                });
+            }
+            else
+            {
+                report.Reason = reason;
+                report.Details = details;
+                report.Status = "open";
+                report.CreatedAt = DateTime.UtcNow;
+            }
+            await _dbContext.SaveChangesAsync();
+
+            _logger.LogWarning("Comment {CommentId} on story {JournalId} reported ({Reason}).", commentId, id, reason);
+            await _moderation.ReportedAsync("comment", reason, userId.Value, comment.Body);
+
+            return Ok(new { message = "Thanks, we'll take a look." });
         }
 
         // ─── Likes ───────────────────────────────────────────────────────────────
