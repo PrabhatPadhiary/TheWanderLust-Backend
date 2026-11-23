@@ -1,10 +1,12 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using TheWanderLustWebAPI.Context;
 using TheWanderLustWebAPI.Models;
 using TheWanderLustWebAPI.Models.Dtos;
 using TheWanderLustWebAPI.Services;
+using TheWanderLustWebAPI.Settings;
 
 namespace TheWanderLustWebAPI.Controllers
 {
@@ -43,7 +45,7 @@ namespace TheWanderLustWebAPI.Controllers
 
             var journals = await _dbContext.Journals
                 .AsNoTracking()
-                .Where(j => j.Status == "published" && j.Visibility == "public")
+                .Where(j => j.Status == "published" && j.Visibility == "public" && j.User.IsActive)
                 .Where(j => !signedIn || (
                     !_dbContext.UserBlocks.Any(b => b.BlockerId == uid && b.BlockedId == j.UserId)
                     && !_dbContext.HiddenJournals.Any(h => h.UserId == uid && h.JournalId == j.Id)))
@@ -115,7 +117,7 @@ namespace TheWanderLustWebAPI.Controllers
             var (blocked, hidden) = await ExclusionsFor(userId);
 
             var journals = await _dbContext.Journals
-                .Where(j => j.Status == "published" && j.Visibility == "public"
+                .Where(j => j.Status == "published" && j.Visibility == "public" && j.User.IsActive
                     && j.Places.Any(p => p.GooglePlaceId == googlePlaceId))
                 .Where(j => !blocked.Contains(j.UserId) && !hidden.Contains(j.Id))
                 .OrderByDescending(j => j.PublishedAt)
@@ -231,8 +233,8 @@ namespace TheWanderLustWebAPI.Controllers
             if (journal == null)
                 return NotFound("Journal not found.");
 
-            // If it's not public+published, only the author can view
-            if (journal.Status != "published" || journal.Visibility != "public")
+            // If it's not public+published (or its author is suspended), only the author can view
+            if (journal.Status != "published" || journal.Visibility != "public" || !journal.User.IsActive)
             {
                 var requesterId = await GetCurrentUserId();
                 if (requesterId == null || journal.UserId != requesterId.Value)
@@ -253,7 +255,7 @@ namespace TheWanderLustWebAPI.Controllers
             // Fetch comments with author info
             var comments = await _dbContext.JournalComments
                 .Include(c => c.User)
-                .Where(c => c.JournalId == id && !blockedUsers.Contains(c.UserId))
+                .Where(c => c.JournalId == id && !blockedUsers.Contains(c.UserId) && c.User.IsActive)
                 .OrderBy(c => c.CreatedAt)
                 .Select(c => new
                 {
@@ -311,6 +313,7 @@ namespace TheWanderLustWebAPI.Controllers
         /// <summary>
         /// Create a new journal. Auth required.
         /// </summary>
+        [EnableRateLimiting(RateLimits.Uploads)]
         [HttpPost]
         [Authorize]
         public async Task<IActionResult> Create([FromBody] CreateJournalDto dto)
@@ -323,6 +326,10 @@ namespace TheWanderLustWebAPI.Controllers
 
             if (string.IsNullOrWhiteSpace(dto.Destination))
                 return BadRequest("Destination is required.");
+
+            var tooLong = TooLong(dto.Title, dto.Body, dto.Destination, dto.ProTips, dto.Places?.Count ?? 0);
+            if (tooLong != null)
+                return BadRequest(tooLong);
 
             var validVisibility = new[] { "public", "private" };
             var visibility = string.IsNullOrWhiteSpace(dto.Visibility) ? "private" : dto.Visibility.ToLower();
@@ -400,10 +407,15 @@ namespace TheWanderLustWebAPI.Controllers
         /// <summary>
         /// Update a journal. Only the author can update.
         /// </summary>
+        [EnableRateLimiting(RateLimits.Uploads)]
         [HttpPut("{id}")]
         [Authorize]
         public async Task<IActionResult> Update(Guid id, [FromBody] UpdateJournalDto dto)
         {
+            var tooLong = dto == null ? null : TooLong(dto.Title, dto.Body, dto.Destination, dto.ProTips, dto.Places?.Count ?? 0);
+            if (tooLong != null)
+                return BadRequest(tooLong);
+
             var userId = await GetCurrentUserId();
             if (userId == null)
                 return Unauthorized();
@@ -566,6 +578,7 @@ namespace TheWanderLustWebAPI.Controllers
         /// Upload photos for a journal. Only the author can upload. Max 10 files, 5MB each.
         /// Photos are stored in Cloudinary under journals/{journalId}/.
         /// </summary>
+        [EnableRateLimiting(RateLimits.Uploads)]
         [HttpPost("{id}/photos")]
         [Authorize]
         public async Task<IActionResult> UploadPhotos(Guid id, [FromForm] List<IFormFile> files)
@@ -595,6 +608,10 @@ namespace TheWanderLustWebAPI.Controllers
 
             if (journal == null)
                 return NotFound("Journal not found.");
+
+            var existing = await _dbContext.JournalPhotos.CountAsync(p => p.JournalId == id);
+            if (existing + files.Count > MaxPhotosPerStory)
+                return BadRequest($"A story can have up to {MaxPhotosPerStory} photos.");
 
             var currentMaxOrder = await _dbContext.JournalPhotos
                 .Where(p => p.JournalId == id)
@@ -739,6 +756,27 @@ namespace TheWanderLustWebAPI.Controllers
             return Ok(journal.Photos.OrderBy(p => p.Order).Select(p => new { p.Id, p.Url, p.Order }));
         }
 
+        // ─── Limits (well above what the app and website allow) ─────────────────
+
+        internal const int MaxTitle = 200;
+        internal const int MaxBody = 20000;
+        internal const int MaxDestination = 200;
+        internal const int MaxProTips = 5000;
+        internal const int MaxPlaces = 50;
+        internal const int MaxPhotosPerStory = 20;
+        internal const int MaxComment = 2000;
+
+        /// <summary>Null when fine, else what's too long.</summary>
+        private static string? TooLong(string? title, string? body, string? destination, string? proTips, int places)
+        {
+            if (title?.Length > MaxTitle) return $"Title can be up to {MaxTitle} characters.";
+            if (body?.Length > MaxBody) return $"A story can be up to {MaxBody} characters.";
+            if (destination?.Length > MaxDestination) return $"Destination can be up to {MaxDestination} characters.";
+            if (proTips?.Length > MaxProTips) return $"Tips can be up to {MaxProTips} characters.";
+            if (places > MaxPlaces) return $"A story can tag up to {MaxPlaces} places.";
+            return null;
+        }
+
         // ─── Community safety: report, "not interested" ─────────────────────────
 
         private static readonly HashSet<string> ReportReasons = new(StringComparer.OrdinalIgnoreCase)
@@ -756,6 +794,7 @@ namespace TheWanderLustWebAPI.Controllers
         /// Report a story. One report per person per story (reporting again
         /// updates it). The story is also hidden from the reporter's feed.
         /// </summary>
+        [EnableRateLimiting(RateLimits.Safety)]
         [HttpPost("{id}/report")]
         [Authorize]
         public async Task<IActionResult> Report(Guid id, [FromBody] ReportJournalDto dto)
@@ -807,6 +846,7 @@ namespace TheWanderLustWebAPI.Controllers
         }
 
         /// <summary>"Not interested": hide a story from your own feed.</summary>
+        [EnableRateLimiting(RateLimits.Safety)]
         [HttpPost("{id}/hide")]
         [Authorize]
         public async Task<IActionResult> Hide(Guid id)
@@ -822,6 +862,7 @@ namespace TheWanderLustWebAPI.Controllers
         }
 
         /// <summary>Undo "Not interested".</summary>
+        [EnableRateLimiting(RateLimits.Safety)]
         [HttpDelete("{id}/hide")]
         [Authorize]
         public async Task<IActionResult> Unhide(Guid id)
@@ -895,7 +936,7 @@ namespace TheWanderLustWebAPI.Controllers
                 .ToListAsync();
             var comments = await _dbContext.JournalComments
                 .Include(c => c.User)
-                .Where(c => c.JournalId == id && !blockedUsers.Contains(c.UserId)
+                .Where(c => c.JournalId == id && !blockedUsers.Contains(c.UserId) && c.User.IsActive
                     && !reported.Contains(c.Id)
                     && (c.ParentCommentId == null || !reported.Contains(c.ParentCommentId.Value)))
                 .OrderBy(c => c.CreatedAt)
@@ -916,12 +957,15 @@ namespace TheWanderLustWebAPI.Controllers
         /// <summary>
         /// Add a comment to a journal. Auth required.
         /// </summary>
+        [EnableRateLimiting(RateLimits.Comments)]
         [HttpPost("{id}/comments")]
         [Authorize]
         public async Task<IActionResult> AddComment(Guid id, [FromBody] AddCommentDto dto)
         {
             if (string.IsNullOrWhiteSpace(dto?.Body))
                 return BadRequest("Comment body is required.");
+            if (dto.Body.Trim().Length > MaxComment)
+                return BadRequest($"A comment can be up to {MaxComment} characters.");
 
             var journal = await _dbContext.Journals.FirstOrDefaultAsync(j => j.Id == id);
             if (journal == null || journal.Status != "published" || journal.Visibility != "public")
@@ -974,12 +1018,15 @@ namespace TheWanderLustWebAPI.Controllers
         /// <summary>
         /// Edit your own comment. Auth required.
         /// </summary>
+        [EnableRateLimiting(RateLimits.Comments)]
         [HttpPut("{id}/comments/{commentId}")]
         [Authorize]
         public async Task<IActionResult> UpdateComment(Guid id, Guid commentId, [FromBody] AddCommentDto dto)
         {
             if (string.IsNullOrWhiteSpace(dto?.Body))
                 return BadRequest("Comment body is required.");
+            if (dto.Body.Trim().Length > MaxComment)
+                return BadRequest($"A comment can be up to {MaxComment} characters.");
 
             var userId = await GetCurrentUserId();
             if (userId == null)
@@ -1039,6 +1086,7 @@ namespace TheWanderLustWebAPI.Controllers
         /// Report a comment or reply. One report per person per comment
         /// (reporting again updates it). The comment is hidden from the reporter.
         /// </summary>
+        [EnableRateLimiting(RateLimits.Safety)]
         [HttpPost("{id}/comments/{commentId}/report")]
         [Authorize]
         public async Task<IActionResult> ReportComment(Guid id, Guid commentId, [FromBody] ReportJournalDto dto)
@@ -1093,6 +1141,7 @@ namespace TheWanderLustWebAPI.Controllers
         /// <summary>
         /// Toggle like on a journal. Returns liked: true/false. Auth required.
         /// </summary>
+        [EnableRateLimiting(RateLimits.Likes)]
         [HttpPost("{id}/like")]
         [Authorize]
         public async Task<IActionResult> ToggleLike(Guid id)

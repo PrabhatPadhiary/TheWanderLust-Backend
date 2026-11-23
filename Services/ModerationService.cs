@@ -1,4 +1,6 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
+using TheWanderLustWebAPI.Middleware;
 using TheWanderLustWebAPI.Context;
 using TheWanderLustWebAPI.Models;
 
@@ -20,10 +22,12 @@ namespace TheWanderLustWebAPI.Services
         private readonly NotificationSender _sender;
         private readonly CloudinaryService _cloudinary;
         private readonly ILogger<ModerationService> _logger;
+        private readonly IMemoryCache _cache;
 
         public ModerationService(AppDbContext dbContext, NotificationSender sender, CloudinaryService cloudinary,
-            ILogger<ModerationService> logger)
+            ILogger<ModerationService> logger, IMemoryCache cache)
         {
+            _cache = cache;
             _dbContext = dbContext;
             _sender = sender;
             _cloudinary = cloudinary;
@@ -90,6 +94,27 @@ namespace TheWanderLustWebAPI.Services
                 _logger.LogWarning(ex, "Could not delete Cloudinary photos for removed journal {JournalId}.", journalId);
             }
             return true;
+        }
+
+        /// <summary>
+        /// Suspend (active false) or restore an account. Suspended: every
+        /// signed-in request is refused, their stories and comments are hidden
+        /// from everyone, and their phones stop getting notifications.
+        /// Moderators can't be suspended this way.
+        /// </summary>
+        /// <returns>null when done, else why not.</returns>
+        public async Task<string?> SetActiveAsync(Guid userId, bool active)
+        {
+            var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.Id == userId);
+            if (user == null) return "That account no longer exists.";
+            if (!active && IsModerator(user)) return "Moderators can't be suspended.";
+            user.IsActive = active;
+            if (!active)
+                await _dbContext.PushTokens.Where(t => t.UserId == userId).ExecuteDeleteAsync();
+            await _dbContext.SaveChangesAsync();
+            SuspendedAccountMiddleware.Forget(_cache, user.FirebaseId);
+            _logger.LogWarning("Moderation: account {UserId} {Action}.", userId, active ? "restored" : "suspended");
+            return null;
         }
 
         private static string Shorten(string s, int max)

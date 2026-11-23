@@ -99,6 +99,8 @@ namespace TheWanderLustWebAPI.Controllers
                 .AnyAsync(d => d.Id == dto.DestinationId && d.TripId == tripId);
             if (!destinationExists)
                 return BadRequest("Destination not found in this trip.");
+            if (dto.TripPlaceId.HasValue && !await PlaceInTrip(tripId, dto.TripPlaceId.Value))
+                return BadRequest("Place not found in this trip.");
 
             var item = new ItineraryItem
             {
@@ -170,7 +172,11 @@ namespace TheWanderLustWebAPI.Controllers
             }
 
             if (dto.TripPlaceId.HasValue)
+            {
+                if (dto.TripPlaceId.Value != Guid.Empty && !await PlaceInTrip(tripId, dto.TripPlaceId.Value))
+                    return BadRequest("Place not found in this trip.");
                 item.TripPlaceId = dto.TripPlaceId.Value == Guid.Empty ? null : dto.TripPlaceId;
+            }
 
             if (!string.IsNullOrWhiteSpace(dto.Title))
                 item.Title = dto.Title;
@@ -357,6 +363,10 @@ namespace TheWanderLustWebAPI.Controllers
 
             return Ok(new { deleted = orphanedItems.Count });
         }
+
+        /// <summary>A saved place on one of this trip's destinations (not another trip's).</summary>
+        private Task<bool> PlaceInTrip(Guid tripId, Guid tripPlaceId) =>
+            _dbContext.TripPlaces.AnyAsync(p => p.Id == tripPlaceId && p.TripDestination.TripId == tripId);
 
         private async Task<Guid?> GetCurrentUserId()
         {

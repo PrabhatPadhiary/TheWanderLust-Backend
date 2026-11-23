@@ -115,6 +115,24 @@ namespace TheWanderLustWebAPI.Controllers
             return Ok(new { closed });
         }
 
+        /// <summary>Suspend an account (e.g. with "Remove and suspend author").</summary>
+        [HttpPost("users/{userId:guid}/suspend")]
+        public async Task<IActionResult> Suspend(Guid userId)
+        {
+            if (!await IsModerator()) return Forbid();
+            var problem = await _moderation.SetActiveAsync(userId, false);
+            return problem == null ? Ok(new { suspended = true }) : BadRequest(problem);
+        }
+
+        /// <summary>Restore a suspended account.</summary>
+        [HttpPost("users/{userId:guid}/restore")]
+        public async Task<IActionResult> Restore(Guid userId)
+        {
+            if (!await IsModerator()) return Forbid();
+            var problem = await _moderation.SetActiveAsync(userId, true);
+            return problem == null ? Ok(new { suspended = false }) : BadRequest(problem);
+        }
+
         private async Task<bool> IsModerator()
         {
             var firebaseUid = User.FindFirst("firebase_uid")?.Value;

@@ -93,10 +93,12 @@ builder.Services.AddCors(options =>
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-    options.OnRejected = (context, _) =>
+    options.OnRejected = async (context, token) =>
     {
         context.HttpContext.Response.Headers.RetryAfter = "60";
-        return ValueTask.CompletedTask;
+        // Plain text, so the app shows it as the error message.
+        context.HttpContext.Response.ContentType = "text/plain";
+        await context.HttpContext.Response.WriteAsync("You're doing that too fast. Please wait a minute and try again.", token);
     };
 
     static string ClientKey(HttpContext ctx) =>
@@ -109,6 +111,23 @@ builder.Services.AddRateLimiter(options =>
             Window = TimeSpan.FromMinutes(1),
             QueueLimit = 0,
         }));
+
+    // Per account: the Firebase uid once signed in (so set after authentication).
+    static string UserKey(HttpContext ctx) =>
+        ctx.User.FindFirst("firebase_uid")?.Value is { Length: > 0 } uid ? "u:" + uid : "ip:" + ClientKey(ctx);
+
+    void PerUser(Microsoft.AspNetCore.RateLimiting.RateLimiterOptions o, string name, int perMinute) =>
+        o.AddPolicy(name, ctx => RateLimitPartition.GetFixedWindowLimiter(UserKey(ctx), _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = perMinute,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0,
+        }));
+
+    PerUser(options, RateLimits.Comments, 10);
+    PerUser(options, RateLimits.Likes, 60);
+    PerUser(options, RateLimits.Safety, 20);
+    PerUser(options, RateLimits.Uploads, 30);
 
     options.AddPolicy(RateLimits.Photos, ctx =>
         RateLimitPartition.GetFixedWindowLimiter(ClientKey(ctx), _ => new FixedWindowRateLimiterOptions
@@ -155,9 +174,11 @@ if (!app.Environment.IsDevelopment())
 
 app.UseCors("AllowFrontend");
 
-app.UseRateLimiter();
-
 app.UseAuthentication();
+// Suspended accounts stop here (see SuspendedAccountMiddleware).
+app.UseMiddleware<TheWanderLustWebAPI.Middleware.SuspendedAccountMiddleware>();
+// After authentication: the per-account limits key on who's signed in.
+app.UseRateLimiter();
 app.UseAuthorization();
 
 app.MapControllers();

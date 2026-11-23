@@ -58,6 +58,9 @@ namespace TheWanderLustWebAPI.Controllers
                     await _dbContext.SaveChangesAsync();
                 }
 
+                if (!user.IsActive)
+                    return StatusCode(StatusCodes.Status403Forbidden, TheWanderLustWebAPI.Middleware.SuspendedAccountMiddleware.Message);
+
                 return Ok(new
                 {
                     user.Id,

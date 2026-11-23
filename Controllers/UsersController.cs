@@ -2,6 +2,8 @@ using TheWanderLustWebAPI.Services;
 using FirebaseAdmin.Auth;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
+using TheWanderLustWebAPI.Settings;
 using Microsoft.EntityFrameworkCore;
 using TheWanderLustWebAPI.Context;
 using TheWanderLustWebAPI.Models;
@@ -40,6 +42,7 @@ namespace TheWanderLustWebAPI.Controllers
         /// Block someone: you stop seeing their stories and comments anywhere.
         /// They aren't told.
         /// </summary>
+        [EnableRateLimiting(RateLimits.Safety)]
         [HttpPost("{id:guid}/block")]
         public async Task<IActionResult> Block(Guid id)
         {
@@ -59,6 +62,7 @@ namespace TheWanderLustWebAPI.Controllers
         }
 
         /// <summary>Unblock someone.</summary>
+        [EnableRateLimiting(RateLimits.Safety)]
         [HttpDelete("{id:guid}/block")]
         public async Task<IActionResult> Unblock(Guid id)
         {
@@ -233,6 +237,7 @@ namespace TheWanderLustWebAPI.Controllers
         /// Set the profile photo (one image, multipart field "file"). Replaces
         /// the previous one; shown on journals and shared trips.
         /// </summary>
+        [EnableRateLimiting(RateLimits.Uploads)]
         [HttpPost("me/photo")]
         [RequestSizeLimit(MaxPhotoBytes + 1024 * 1024)]
         public async Task<IActionResult> UploadPhoto([FromForm] IFormFile file)
