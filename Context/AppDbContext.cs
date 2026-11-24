@@ -32,6 +32,9 @@ namespace TheWanderLustWebAPI.Context
         public DbSet<PendingNotification> PendingNotifications { get; set; }
         public DbSet<UserNotification> UserNotifications { get; set; }
         public DbSet<TripAnnouncement> TripAnnouncements { get; set; }
+        public DbSet<TripPoll> TripPolls { get; set; }
+        public DbSet<TripPollOption> TripPollOptions { get; set; }
+        public DbSet<TripPollVote> TripPollVotes { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -254,6 +257,37 @@ namespace TheWanderLustWebAPI.Context
                 entity.HasOne(e => e.Trip).WithMany().HasForeignKey(e => e.TripId).OnDelete(DeleteBehavior.Cascade).IsRequired(false);
                 entity.HasOne(e => e.Journal).WithMany().HasForeignKey(e => e.JournalId).OnDelete(DeleteBehavior.Cascade).IsRequired(false);
                 entity.HasOne(e => e.Actor).WithMany().HasForeignKey(e => e.ActorId).OnDelete(DeleteBehavior.SetNull).IsRequired(false);
+            });
+
+            modelBuilder.Entity<TripPoll>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+                entity.HasIndex(e => new { e.TripId, e.CreatedAt });
+                entity.Property(e => e.Question).HasMaxLength(TripPoll.QuestionMaxLength);
+                entity.Property(e => e.Slot).HasMaxLength(20);
+                entity.HasOne(e => e.Trip).WithMany().HasForeignKey(e => e.TripId).OnDelete(DeleteBehavior.Cascade);
+                entity.HasOne(e => e.CreatedByUser).WithMany().HasForeignKey(e => e.CreatedByUserId).OnDelete(DeleteBehavior.SetNull).IsRequired(false);
+                // Removing that item from the itinerary lets the winner be added again.
+                entity.HasOne<ItineraryItem>().WithMany().HasForeignKey(e => e.ItineraryItemId).OnDelete(DeleteBehavior.SetNull).IsRequired(false);
+            });
+
+            modelBuilder.Entity<TripPollOption>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+                entity.Property(e => e.Text).HasMaxLength(TripPollOption.TextMaxLength);
+                entity.Property(e => e.Category).HasMaxLength(40);
+                entity.HasOne(e => e.Poll).WithMany(p => p.Options).HasForeignKey(e => e.PollId).OnDelete(DeleteBehavior.Cascade);
+                entity.HasOne(e => e.TripPlace).WithMany().HasForeignKey(e => e.TripPlaceId).OnDelete(DeleteBehavior.SetNull).IsRequired(false);
+            });
+
+            modelBuilder.Entity<TripPollVote>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+                entity.HasIndex(e => new { e.PollId, e.UserId }).IsUnique();
+                entity.HasOne(e => e.Poll).WithMany(p => p.Votes).HasForeignKey(e => e.PollId).OnDelete(DeleteBehavior.Cascade);
+                entity.HasOne(e => e.Option).WithMany().HasForeignKey(e => e.OptionId).OnDelete(DeleteBehavior.Cascade);
+                // Deleting an account takes its votes with it.
+                entity.HasOne(e => e.User).WithMany().HasForeignKey(e => e.UserId).OnDelete(DeleteBehavior.Cascade);
             });
 
             modelBuilder.Entity<TripAnnouncement>(entity =>

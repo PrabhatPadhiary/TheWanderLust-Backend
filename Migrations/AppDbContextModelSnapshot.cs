@@ -828,6 +828,117 @@ namespace TheWanderLustWebAPI.Migrations
                     b.ToTable("TripPlaces");
                 });
 
+            modelBuilder.Entity("TheWanderLustWebAPI.Models.TripPoll", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("ClosedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("ClosesAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("CreatedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("ItineraryItemId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Question")
+                        .HasMaxLength(140)
+                        .HasColumnType("character varying(140)");
+
+                    b.Property<DateTime?>("ScheduledDate")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Slot")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<Guid>("TripId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CreatedByUserId");
+
+                    b.HasIndex("ItineraryItemId");
+
+                    b.HasIndex("TripId", "CreatedAt");
+
+                    b.ToTable("TripPolls");
+                });
+
+            modelBuilder.Entity("TheWanderLustWebAPI.Models.TripPollOption", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Category")
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)");
+
+                    b.Property<int>("Order")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("PhotoUrl")
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("PollId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Text")
+                        .HasMaxLength(120)
+                        .HasColumnType("character varying(120)");
+
+                    b.Property<Guid?>("TripPlaceId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PollId");
+
+                    b.HasIndex("TripPlaceId");
+
+                    b.ToTable("TripPollOptions");
+                });
+
+            modelBuilder.Entity("TheWanderLustWebAPI.Models.TripPollVote", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("OptionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("PollId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("OptionId");
+
+                    b.HasIndex("UserId");
+
+                    b.HasIndex("PollId", "UserId")
+                        .IsUnique();
+
+                    b.ToTable("TripPollVotes");
+                });
+
             modelBuilder.Entity("TheWanderLustWebAPI.Models.User", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1287,6 +1398,74 @@ namespace TheWanderLustWebAPI.Migrations
                     b.Navigation("TripDestination");
                 });
 
+            modelBuilder.Entity("TheWanderLustWebAPI.Models.TripPoll", b =>
+                {
+                    b.HasOne("TheWanderLustWebAPI.Models.User", "CreatedByUser")
+                        .WithMany()
+                        .HasForeignKey("CreatedByUserId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("TheWanderLustWebAPI.Models.ItineraryItem", null)
+                        .WithMany()
+                        .HasForeignKey("ItineraryItemId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("TheWanderLustWebAPI.Models.Trip", "Trip")
+                        .WithMany()
+                        .HasForeignKey("TripId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("CreatedByUser");
+
+                    b.Navigation("Trip");
+                });
+
+            modelBuilder.Entity("TheWanderLustWebAPI.Models.TripPollOption", b =>
+                {
+                    b.HasOne("TheWanderLustWebAPI.Models.TripPoll", "Poll")
+                        .WithMany("Options")
+                        .HasForeignKey("PollId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("TheWanderLustWebAPI.Models.TripPlace", "TripPlace")
+                        .WithMany()
+                        .HasForeignKey("TripPlaceId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("Poll");
+
+                    b.Navigation("TripPlace");
+                });
+
+            modelBuilder.Entity("TheWanderLustWebAPI.Models.TripPollVote", b =>
+                {
+                    b.HasOne("TheWanderLustWebAPI.Models.TripPollOption", "Option")
+                        .WithMany()
+                        .HasForeignKey("OptionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("TheWanderLustWebAPI.Models.TripPoll", "Poll")
+                        .WithMany("Votes")
+                        .HasForeignKey("PollId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("TheWanderLustWebAPI.Models.User", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Option");
+
+                    b.Navigation("Poll");
+
+                    b.Navigation("User");
+                });
+
             modelBuilder.Entity("TheWanderLustWebAPI.Models.UserBlock", b =>
                 {
                     b.HasOne("TheWanderLustWebAPI.Models.User", "Blocked")
@@ -1355,6 +1534,13 @@ namespace TheWanderLustWebAPI.Migrations
             modelBuilder.Entity("TheWanderLustWebAPI.Models.TripDestination", b =>
                 {
                     b.Navigation("Places");
+                });
+
+            modelBuilder.Entity("TheWanderLustWebAPI.Models.TripPoll", b =>
+                {
+                    b.Navigation("Options");
+
+                    b.Navigation("Votes");
                 });
 #pragma warning restore 612, 618
         }

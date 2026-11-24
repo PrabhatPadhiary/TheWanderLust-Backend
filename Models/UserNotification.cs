@@ -15,7 +15,7 @@ namespace TheWanderLustWebAPI.Models
         public Guid? JournalId { get; set; }
         /// <summary>Who did it (their photo on the row). Null once they deleted their account.</summary>
         public Guid? ActorId { get; set; }
-        /// <summary>"joined", "places", "expenses", "itinerary", "announcement", "likes", "comment", "reply".</summary>
+        /// <summary>"joined", "places", "expenses", "itinerary", "announcement", "poll", "likes", "comment", "reply".</summary>
         public string Type { get; set; }
         /// <summary>The trip's name, or the story's title.</summary>
         public string Title { get; set; }

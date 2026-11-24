@@ -22,7 +22,7 @@ namespace TheWanderLustWebAPI.Services
         }
 
         /// <param name="recipients">Who gets it (leave out whoever caused it).</param>
-        /// <param name="type">"joined", "places", "expenses", "itinerary", "announcement", "likes", "comment", "reply".</param>
+        /// <param name="type">"joined", "places", "expenses", "itinerary", "announcement", "poll", "likes", "comment", "reply".</param>
         /// <param name="title">The trip's name, or the story's title.</param>
         /// <param name="journalId">The story, for likes / comments / replies (tapping opens it).</param>
         public async Task SendAsync(IEnumerable<Guid> recipients, Guid? tripId, Guid? actorId, string type,

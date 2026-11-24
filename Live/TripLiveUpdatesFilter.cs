@@ -32,6 +32,7 @@ namespace TheWanderLustWebAPI.Live
             ["TripMembers"] = "travellers",
             ["Invitations"] = "travellers",
             ["TripAnnouncements"] = "announcements",
+            ["TripPolls"] = "polls",
         };
 
         // Changes nobody else needs to see (creating a trip, managing invite links).
@@ -44,7 +45,7 @@ namespace TheWanderLustWebAPI.Live
         };
 
         // Where the item's name lives on the returned object, in order of preference.
-        private static readonly string[] NameProperties = { "PlaceName", "Title", "Name", "Text" };
+        private static readonly string[] NameProperties = { "PlaceName", "Title", "Name", "Text", "Question" };
 
         private readonly AppDbContext _dbContext;
         private readonly IHubContext<TripHub> _hub;
@@ -200,6 +201,10 @@ namespace TheWanderLustWebAPI.Live
                 ("Invitations", "Join") => ("travellers", "joined"),
                 ("Trips", "Delete") => ("trip", "deleted"),
                 ("Trips", "SetBudget") => ("budget", "updated"),
+                ("TripPolls", "Vote") => ("polls", "voted"),
+                ("TripPolls", "Unvote") => ("polls", "unvoted"),
+                ("TripPolls", "Close") => ("polls", "closed"),
+                ("TripPolls", "LinkItinerary") => ("polls", "linked"),
                 ("Trips", "AddDestination" or "DeleteDestination" or "UpdateDestinationDates"
                     or "ReorderDestinations" or "SetPrimaryDestination") => ("stops", change),
                 _ => (Sections[controller], change),
