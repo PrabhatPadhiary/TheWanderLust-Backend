@@ -25,7 +25,7 @@ namespace TheWanderLustWebAPI.Controllers
         }
 
         /// <summary>
-        /// Open reports, one row per reported story or comment, most recently
+        /// Open reports, one row per reported story, comment or profile, most recently
         /// reported first.
         /// </summary>
         [HttpGet("reports")]
@@ -78,7 +78,28 @@ namespace TheWanderLustWebAPI.Controllers
                 g.Where(r => !string.IsNullOrWhiteSpace(r.Details)).Select(r => r.Details!).ToList(),
                 g.Max(r => r.CreatedAt)));
 
-            return Ok(stories.Concat(comments).OrderByDescending(i => i.LastReportedAt));
+            var profileReports = await _dbContext.UserReports
+                .Where(r => r.Status == "open")
+                .Select(r => new
+                {
+                    r.ReportedUserId,
+                    r.Reason,
+                    r.Details,
+                    r.CreatedAt,
+                    Name = r.ReportedUser.Name,
+                    Bio = r.ReportedUser.Bio,
+                })
+                .ToListAsync();
+
+            // A profile: the content is their bio (name and photo show in the app).
+            var profiles = profileReports.GroupBy(r => r.ReportedUserId).Select(g => new ReportItem(
+                "profile", g.Key, Guid.Empty, null, Snip(g.First().Bio),
+                g.Key, g.First().Name, g.Count(),
+                g.Select(r => r.Reason).Distinct().ToList(),
+                g.Where(r => !string.IsNullOrWhiteSpace(r.Details)).Select(r => r.Details!).ToList(),
+                g.Max(r => r.CreatedAt)));
+
+            return Ok(stories.Concat(comments).Concat(profiles).OrderByDescending(i => i.LastReportedAt));
         }
 
         /// <summary>Remove the reported story or comment (its reports go with it).</summary>
@@ -90,9 +111,11 @@ namespace TheWanderLustWebAPI.Controllers
             {
                 "story" => await _moderation.RemoveStoryAsync(targetId),
                 "comment" => await _moderation.RemoveCommentAsync(targetId),
+                // A profile: its bio goes (the photo and name stay; suspend for worse).
+                "profile" => await _moderation.ClearBioAsync(targetId),
                 _ => (bool?)null,
             };
-            if (removed == null) return BadRequest("Kind must be story or comment.");
+            if (removed == null) return BadRequest("Kind must be story, comment or profile.");
             return Ok(new { removed = removed.Value, message = removed.Value ? "Removed." : "It was already deleted." });
         }
 
@@ -110,8 +133,12 @@ namespace TheWanderLustWebAPI.Controllers
                 closed = await _dbContext.CommentReports
                     .Where(r => r.CommentId == targetId && r.Status == "open")
                     .ExecuteUpdateAsync(s => s.SetProperty(r => r.Status, "resolved"));
+            else if (kind == "profile")
+                closed = await _dbContext.UserReports
+                    .Where(r => r.ReportedUserId == targetId && r.Status == "open")
+                    .ExecuteUpdateAsync(s => s.SetProperty(r => r.Status, "resolved"));
             else
-                return BadRequest("Kind must be story or comment.");
+                return BadRequest("Kind must be story, comment or profile.");
             return Ok(new { closed });
         }
 

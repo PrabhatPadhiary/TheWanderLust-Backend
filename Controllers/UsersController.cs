@@ -24,9 +24,12 @@ namespace TheWanderLustWebAPI.Controllers
         private readonly AppDbContext _dbContext;
         private readonly CloudinaryService _cloudinaryService;
         private readonly ILogger<UsersController> _logger;
+        private readonly ModerationService _moderation;
 
-        public UsersController(AppDbContext dbContext, CloudinaryService cloudinaryService, ILogger<UsersController> logger)
+        public UsersController(AppDbContext dbContext, CloudinaryService cloudinaryService, ILogger<UsersController> logger,
+            ModerationService moderation)
         {
+            _moderation = moderation;
             _dbContext = dbContext;
             _cloudinaryService = cloudinaryService;
             _logger = logger;
@@ -59,6 +62,62 @@ namespace TheWanderLustWebAPI.Controllers
                 await _dbContext.SaveChangesAsync();
             }
             return Ok(new { blocked = true });
+        }
+
+        private static readonly HashSet<string> ReportReasons = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "spam", "inappropriate", "harassment", "false_info", "other",
+        };
+
+        /// <summary>
+        /// Report someone's profile (name, photo or bio). A moderator reviews
+        /// it. Reporting again updates your report.
+        /// </summary>
+        [EnableRateLimiting(RateLimits.Safety)]
+        [HttpPost("{id:guid}/report")]
+        public async Task<IActionResult> Report(Guid id, [FromBody] ReportUserDto dto)
+        {
+            var user = await GetCurrentUser();
+            if (user == null)
+                return Unauthorized();
+            if (id == user.Id)
+                return BadRequest("You can't report yourself.");
+            var reason = (dto?.Reason ?? "").Trim().ToLowerInvariant();
+            if (!ReportReasons.Contains(reason))
+                return BadRequest("Pick a reason: spam, inappropriate, harassment, false_info or other.");
+            var reported = await _dbContext.Users.FirstOrDefaultAsync(u => u.Id == id);
+            if (reported == null)
+                return NotFound("User not found.");
+
+            var details = string.IsNullOrWhiteSpace(dto?.Details) ? null : dto.Details.Trim();
+            if (details?.Length > 500) details = details[..500];
+
+            var report = await _dbContext.UserReports
+                .FirstOrDefaultAsync(r => r.ReportedUserId == id && r.ReporterId == user.Id);
+            if (report == null)
+            {
+                _dbContext.UserReports.Add(new UserReport
+                {
+                    Id = Guid.NewGuid(),
+                    ReportedUserId = id,
+                    ReporterId = user.Id,
+                    Reason = reason,
+                    Details = details,
+                });
+            }
+            else
+            {
+                report.Reason = reason;
+                report.Details = details;
+                report.Status = "open";
+                report.CreatedAt = DateTime.UtcNow;
+            }
+            await _dbContext.SaveChangesAsync();
+
+            _logger.LogWarning("Profile {UserId} reported ({Reason}).", id, reason);
+            await _moderation.ReportedAsync("profile", reason, user.Id,
+                string.IsNullOrWhiteSpace(reported.Bio) ? reported.Name : $"{reported.Name}: {reported.Bio}");
+            return Ok(new { message = "Thanks, we'll take a look." });
         }
 
         /// <summary>Unblock someone.</summary>
@@ -121,34 +180,7 @@ namespace TheWanderLustWebAPI.Controllers
             var journals = await _dbContext.Journals.CountAsync(j => j.UserId == user.Id);
 
             // ── Traveller rank (see TravellerRanks) ──
-            var today = DateTime.UtcNow.Date;
-            var rankTrips = await _dbContext.Trips
-                .Where(t => tripIds.Contains(t.Id) && t.Destinations.Any())
-                .Select(t => new { t.Id, t.EndDate, t.CreatedAt })
-                .ToListAsync();
-            // Taken: its dates have passed, and it was made before it ended
-            // (a trip back-dated after the fact doesn't count).
-            var takenIds = rankTrips
-                .Where(t => t.EndDate != null && t.EndDate.Value.Date < today && t.CreatedAt.Date <= t.EndDate.Value.Date)
-                .Select(t => t.Id)
-                .ToList();
-            var citiesVisited = takenIds.Count == 0 ? 0 : await _dbContext.TripDestinations
-                .Where(d => takenIds.Contains(d.TripId))
-                .Select(d => d.GooglePlaceId)
-                .Distinct()
-                .CountAsync();
-            // Shared stories: published, public, with at least one photo.
-            var shared = await _dbContext.Journals
-                .Where(j => j.UserId == user.Id && j.Status == "published" && j.Visibility == "public" && j.Photos.Any())
-                .Select(j => j.LikesCount)
-                .ToListAsync();
-            var rank = TravellerRanks.Compute(
-                tripsPlanned: rankTrips.Count,
-                tripsTaken: takenIds.Count,
-                cities: citiesVisited,
-                stories: shared.Count,
-                likes: shared.Sum(),
-                places: placesSaved);
+            var rank = await RankCalculator.ForUserAsync(_dbContext, user.Id);
 
             return Ok(new
             {
@@ -156,6 +188,7 @@ namespace TheWanderLustWebAPI.Controllers
                 user.Name,
                 user.Email,
                 user.PhotoUrl,
+                user.Bio,
                 user.CreatedAt,
                 IsModerator = ModerationService.IsModerator(user),
                 Stats = new
@@ -196,6 +229,30 @@ namespace TheWanderLustWebAPI.Controllers
                     }
                 }
             });
+        }
+
+        public const int MaxBioLength = 160;
+
+        /// <summary>
+        /// Set your bio (shown on your public profile). Empty clears it.
+        /// Line breaks are kept, at most two in a row.
+        /// </summary>
+        [HttpPut("me/bio")]
+        public async Task<IActionResult> UpdateBio([FromBody] UpdateBioDto dto)
+        {
+            var user = await GetCurrentUser();
+            if (user == null)
+                return Unauthorized();
+
+            var bio = (dto?.Bio ?? "").Replace("\r\n", "\n").Trim();
+            while (bio.Contains("\n\n\n"))
+                bio = bio.Replace("\n\n\n", "\n\n");
+            if (bio.Length > MaxBioLength)
+                return BadRequest($"Bio must be {MaxBioLength} characters or fewer.");
+
+            user.Bio = bio.Length == 0 ? null : bio;
+            await _dbContext.SaveChangesAsync();
+            return Ok(new { user.Bio });
         }
 
         /// <summary>
@@ -476,5 +533,16 @@ namespace TheWanderLustWebAPI.Controllers
     public class UpdateProfileDto
     {
         public string? Name { get; set; }
+    }
+
+    public class ReportUserDto
+    {
+        public string Reason { get; set; } = "other";
+        public string? Details { get; set; }
+    }
+
+    public class UpdateBioDto
+    {
+        public string? Bio { get; set; }
     }
 }

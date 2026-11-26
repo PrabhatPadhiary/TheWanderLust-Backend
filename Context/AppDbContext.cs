@@ -26,6 +26,7 @@ namespace TheWanderLustWebAPI.Context
         public DbSet<ItineraryItem> ItineraryItems { get; set; }
         public DbSet<JournalReport> JournalReports { get; set; }
         public DbSet<CommentReport> CommentReports { get; set; }
+        public DbSet<UserReport> UserReports { get; set; }
         public DbSet<UserBlock> UserBlocks { get; set; }
         public DbSet<HiddenJournal> HiddenJournals { get; set; }
         public DbSet<PushToken> PushTokens { get; set; }
@@ -201,6 +202,18 @@ namespace TheWanderLustWebAPI.Context
                 entity.Property(e => e.Details).HasMaxLength(500);
                 entity.Property(e => e.Status).HasMaxLength(20);
                 entity.HasOne(e => e.Comment).WithMany().HasForeignKey(e => e.CommentId).OnDelete(DeleteBehavior.Cascade);
+                entity.HasOne(e => e.Reporter).WithMany().HasForeignKey(e => e.ReporterId).OnDelete(DeleteBehavior.Cascade);
+            });
+
+            modelBuilder.Entity<UserReport>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+                entity.HasIndex(e => new { e.ReportedUserId, e.ReporterId }).IsUnique();
+                entity.HasIndex(e => e.Status);
+                entity.Property(e => e.Reason).HasMaxLength(30);
+                entity.Property(e => e.Details).HasMaxLength(500);
+                entity.Property(e => e.Status).HasMaxLength(20);
+                entity.HasOne(e => e.ReportedUser).WithMany().HasForeignKey(e => e.ReportedUserId).OnDelete(DeleteBehavior.Cascade);
                 entity.HasOne(e => e.Reporter).WithMany().HasForeignKey(e => e.ReporterId).OnDelete(DeleteBehavior.Cascade);
             });
 

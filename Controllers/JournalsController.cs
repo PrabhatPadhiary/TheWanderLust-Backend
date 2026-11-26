@@ -160,6 +160,146 @@ namespace TheWanderLustWebAPI.Controllers
         }
 
         /// <summary>
+        /// A traveller's public profile: their name, photo and join date, plus
+        /// their published, public stories (newest first, same shape as the
+        /// feed). No auth required. Only what they chose to publish is shown:
+        /// never email, drafts, hidden stories or trips. Signed in, stories you
+        /// hid or reported are left out, and if you blocked them the stories
+        /// are empty and `isBlocked` is true (so the page can offer Unblock).
+        /// Suspended or unknown accounts are 404.
+        /// </summary>
+        [HttpGet("by-author/{userId:guid}")]
+        public async Task<IActionResult> GetByAuthor(Guid userId)
+        {
+            // Three round trips: who's asking, the person (with counts), their stories.
+            var viewerId = await GetCurrentUserId();
+            var uid = viewerId ?? Guid.Empty;
+            var signedIn = viewerId.HasValue;
+
+            var author = await _dbContext.Users
+                .AsNoTracking()
+                .Where(u => u.Id == userId && u.IsActive)
+                .Select(u => new
+                {
+                    u.Id,
+                    u.Name,
+                    u.PhotoUrl,
+                    u.Bio,
+                    JoinedAt = u.CreatedAt,
+                    IsBlocked = signedIn && _dbContext.UserBlocks.Any(b => b.BlockerId == uid && b.BlockedId == u.Id),
+                    StoryCount = _dbContext.Journals.Count(j => j.UserId == u.Id && j.Status == "published" && j.Visibility == "public"),
+                    // Photos across their public stories.
+                    PhotosCount = _dbContext.JournalPhotos
+                        .Count(ph => ph.Journal.UserId == u.Id && ph.Journal.Status == "published" && ph.Journal.Visibility == "public")
+                })
+                .FirstOrDefaultAsync();
+            if (author == null)
+                return NotFound("Traveller not found.");
+
+            // Their traveller rank: just the level and name, not what it's made of.
+            var rank = author.IsBlocked ? null : await RankCalculator.ForUserAsync(_dbContext, userId);
+
+            var authorRef = new { author.Id, author.Name, author.PhotoUrl };
+            var stories = author.IsBlocked ? new List<object>() : (await _dbContext.Journals
+                .AsNoTracking()
+                .Where(j => j.UserId == userId && j.Status == "published" && j.Visibility == "public")
+                .Where(j => !signedIn || !_dbContext.HiddenJournals.Any(h => h.UserId == uid && h.JournalId == j.Id))
+                .OrderByDescending(j => j.PublishedAt)
+                .Take(AuthorStoriesLimit)
+                .Select(j => new
+                {
+                    j.Id,
+                    j.Title,
+                    j.Destination,
+                    j.StartDate,
+                    j.EndDate,
+                    j.Vibes,
+                    j.LikesCount,
+                    j.CommentsCount,
+                    j.PublishedAt,
+                    j.CreatedAt,
+                    Photos = j.Photos.OrderBy(ph => ph.Order).Select(ph => new { ph.Id, ph.Url, ph.Order }),
+                    // Where it is on a map: the middle of its tagged places.
+                    Lat = j.Places.Where(p => p.Latitude != null && p.Longitude != null).Average(p => p.Latitude),
+                    Lng = j.Places.Where(p => p.Latitude != null && p.Longitude != null).Average(p => p.Longitude),
+                    IsLiked = signedIn && _dbContext.JournalLikes.Any(l => l.JournalId == j.Id && l.UserId == uid)
+                })
+                .ToListAsync())
+                .Select(j => (object)new
+                {
+                    j.Id,
+                    j.Title,
+                    j.Destination,
+                    j.StartDate,
+                    j.EndDate,
+                    j.Vibes,
+                    j.LikesCount,
+                    j.CommentsCount,
+                    j.PublishedAt,
+                    j.CreatedAt,
+                    Author = authorRef,
+                    j.Photos,
+                    Point = j.Lat != null && j.Lng != null ? new { Lat = j.Lat.Value, Lng = j.Lng.Value } : null,
+                    j.IsLiked
+                })
+                .ToList();
+
+            // You and them (signed in, someone else, not blocked): trips you're
+            // both on, and places you've both been.
+            int? tripsTogether = null;
+            List<string>? sharedPlaces = null;
+            if (signedIn && uid != userId && !author.IsBlocked)
+            {
+                tripsTogether = await _dbContext.Trips.CountAsync(t =>
+                    (t.UserId == uid || t.Members.Any(m => m.UserId == uid)) &&
+                    (t.UserId == userId || t.Members.Any(m => m.UserId == userId)));
+
+                // Their places: where their public stories are from.
+                var theirs = await _dbContext.Journals
+                    .Where(j => j.UserId == userId && j.Status == "published" && j.Visibility == "public")
+                    .Select(j => j.Destination)
+                    .ToListAsync();
+                // Yours: stops on your trips that have ended, and your stories.
+                var today = DateTime.UtcNow.Date;
+                var yourTrips = await _dbContext.TripDestinations
+                    .Where(d => (d.Trip.UserId == uid || d.Trip.Members.Any(m => m.UserId == uid))
+                        && d.Trip.EndDate != null && d.Trip.EndDate.Value.Date < today)
+                    .Select(d => d.Name)
+                    .ToListAsync();
+                var yourStories = await _dbContext.Journals
+                    .Where(j => j.UserId == uid && j.Status == "published")
+                    .Select(j => j.Destination)
+                    .ToListAsync();
+                var yours = new HashSet<string>(yourTrips.Concat(yourStories).Select(CityKey).Where(k => k.Length > 0));
+                sharedPlaces = theirs
+                    .Select(d => (Key: CityKey(d), Label: (d ?? "").Split(',')[0].Trim()))
+                    .Where(p => p.Key.Length > 0 && yours.Contains(p.Key))
+                    .GroupBy(p => p.Key)
+                    .Select(g => g.First().Label)
+                    .ToList();
+            }
+
+            return Ok(new
+            {
+                Author = new { author.Id, author.Name, author.PhotoUrl, author.Bio, author.JoinedAt },
+                author.IsBlocked,
+                author.StoryCount,
+                author.PhotosCount,
+                TripsTogether = tripsTogether,
+                SharedPlaces = sharedPlaces,
+                Rank = rank == null ? null : new { rank.Level, rank.Name },
+                Stories = stories
+            });
+        }
+
+        /// <summary>"Kyoto, Japan" -> "kyoto": the city part, for matching places by name.</summary>
+        private static string CityKey(string? place) =>
+            (place ?? "").Split(',')[0].Trim().ToLowerInvariant();
+
+        // A profile lists at most this many of the newest stories.
+        private const int AuthorStoriesLimit = 50;
+
+        /// <summary>
         /// Get my journals (drafts + published). Auth required.
         /// </summary>
         [HttpGet("mine")]

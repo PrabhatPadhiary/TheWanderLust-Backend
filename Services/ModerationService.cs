@@ -38,7 +38,7 @@ namespace TheWanderLustWebAPI.Services
             user != null && string.Equals(user.Role, ModeratorRole, StringComparison.OrdinalIgnoreCase);
 
         /// <summary>A new report: tell the moderators (never fails the request).</summary>
-        /// <param name="what">"story" or "comment".</param>
+        /// <param name="what">"story", "comment" or "profile".</param>
         public async Task ReportedAsync(string what, string reason, Guid reporterId, string? snippet)
         {
             try
@@ -74,6 +74,19 @@ namespace TheWanderLustWebAPI.Services
             if (journal != null)
                 journal.CommentsCount = Math.Max(0, journal.CommentsCount - removed);
             _dbContext.JournalComments.Remove(comment);
+            await _dbContext.SaveChangesAsync();
+            return true;
+        }
+
+        /// <summary>A reported profile: clear their bio and close its reports.</summary>
+        public async Task<bool> ClearBioAsync(Guid userId)
+        {
+            var user = await _dbContext.Users.FirstOrDefaultAsync(u => u.Id == userId);
+            if (user == null) return false;
+            user.Bio = null;
+            await _dbContext.UserReports
+                .Where(r => r.ReportedUserId == userId && r.Status == "open")
+                .ExecuteUpdateAsync(s => s.SetProperty(r => r.Status, "resolved"));
             await _dbContext.SaveChangesAsync();
             return true;
         }
