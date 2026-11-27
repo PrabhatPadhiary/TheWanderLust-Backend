@@ -957,10 +957,16 @@ namespace TheWanderLustWebAPI.Migrations
                     b.Property<string>("FirebaseId")
                         .HasColumnType("text");
 
+                    b.Property<string>("GooglePhotoSourceUrl")
+                        .HasColumnType("text");
+
                     b.Property<bool>("IsActive")
                         .HasColumnType("boolean");
 
                     b.Property<string>("Name")
+                        .HasColumnType("text");
+
+                    b.Property<string>("PhotoSource")
                         .HasColumnType("text");
 
                     b.Property<string>("PhotoUrl")

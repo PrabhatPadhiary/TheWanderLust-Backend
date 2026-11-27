@@ -155,6 +155,10 @@ namespace TheWanderLustWebAPI.Services
         [JsonPropertyName("website")]
         public string Website { get; set; }
 
+        /// <summary>Takes reservations (Google's "reservable"); null when unknown.</summary>
+        [JsonPropertyName("reservable")]
+        public bool? Reservable { get; set; }
+
         [JsonPropertyName("rating")]
         public double? Rating { get; set; }
 

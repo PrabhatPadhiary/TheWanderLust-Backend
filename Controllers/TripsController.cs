@@ -72,6 +72,27 @@ namespace TheWanderLustWebAPI.Controllers
                 .OrderByDescending(t => t.StartDate)
                 .ToListAsync();
 
+            // Progress for each trip's card ("2 days unplanned", "Packing 4/20",
+            // "₹8,400 of ₹20,000 spent"): a few narrow queries, summed here.
+            var tripIds = trips.Select(t => t.Id).ToList();
+            var planDays = (await _dbContext.ItineraryItems
+                    .Where(i => tripIds.Contains(i.TripId))
+                    .Select(i => new { i.TripId, i.ScheduledDate })
+                    .ToListAsync())
+                .GroupBy(i => i.TripId)
+                .ToDictionary(g => g.Key, g => (Days: g.Select(i => i.ScheduledDate.Date).Distinct().Count(), Items: g.Count()));
+            var checklist = (await _dbContext.TripChecklistItems
+                    .Where(c => tripIds.Contains(c.TripId))
+                    .Select(c => new { c.TripId, c.Category, c.IsCompleted })
+                    .ToListAsync())
+                .GroupBy(c => c.TripId)
+                .ToDictionary(g => g.Key, g => g.ToList());
+            var spent = await _dbContext.TripExpenses
+                .Where(e => tripIds.Contains(e.TripId))
+                .GroupBy(e => e.TripId)
+                .Select(g => new { TripId = g.Key, Total = g.Sum(e => e.Amount) })
+                .ToDictionaryAsync(x => x.TripId, x => x.Total);
+
             var result = trips.Select(t => new
             {
                 t.Id,
@@ -92,15 +113,25 @@ namespace TheWanderLustWebAPI.Controllers
                 PrimaryPlaceId = t.PrimaryDestinationId != null
                     ? t.Destinations.Where(d => d.Id == t.PrimaryDestinationId).Select(d => d.GooglePlaceId).FirstOrDefault()
                     : t.Destinations.OrderBy(d => d.Order).ThenBy(d => d.CreatedAt).Select(d => d.GooglePlaceId).FirstOrDefault(),
+                // The same stop's name and location (Home's "Things to book for your trip").
+                PrimaryStop = (t.PrimaryDestinationId != null
+                        ? t.Destinations.Where(d => d.Id == t.PrimaryDestinationId)
+                        : t.Destinations.OrderBy(d => d.Order).ThenBy(d => d.CreatedAt))
+                    .Where(d => d.Latitude != null && d.Longitude != null)
+                    .Select(d => new { d.Name, d.Latitude, d.Longitude })
+                    .FirstOrDefault(),
                 PlaceIds = t.Destinations
                     .SelectMany(d => d.Places)
                     .Select(p => p.PlaceId)
                     .ToList(),
                 // Where each stop is, so "Add to trip" can list trips near a
                 // place first and notice a place far from every stop.
+                // Also each stop's name and dates (in route order), so Home can
+                // show tours for the stop you're at during a trip.
                 Stops = t.Destinations
                     .Where(d => d.Latitude != null && d.Longitude != null)
-                    .Select(d => new { d.Latitude, d.Longitude })
+                    .OrderBy(d => d.Order).ThenBy(d => d.CreatedAt)
+                    .Select(d => new { d.Latitude, d.Longitude, d.Name, d.StartDate, d.EndDate })
                     .ToList(),
                 // Small member summary for list cards (avatars): the total, plus
                 // the first few names with the owner first. Full member details
@@ -116,7 +147,17 @@ namespace TheWanderLustWebAPI.Controllers
                     .ThenBy(m => m.JoinedAt)
                     .Take(3)
                     .Select(m => new { m.UserId, Name = m.User?.Name, PhotoUrl = m.User?.PhotoUrl })
-                    .ToList()
+                    .ToList(),
+                Summary = new
+                {
+                    PlannedDays = planDays.TryGetValue(t.Id, out var plan) ? plan.Days : 0,
+                    ItineraryItems = planDays.TryGetValue(t.Id, out var plan2) ? plan2.Items : 0,
+                    ChecklistTotal = checklist.TryGetValue(t.Id, out var list) ? list.Count : 0,
+                    ChecklistDone = checklist.TryGetValue(t.Id, out var list2) ? list2.Count(c => c.IsCompleted) : 0,
+                    PackingTotal = checklist.TryGetValue(t.Id, out var list3) ? list3.Count(c => c.Category == "packing") : 0,
+                    PackingDone = checklist.TryGetValue(t.Id, out var list4) ? list4.Count(c => c.Category == "packing" && c.IsCompleted) : 0,
+                    Spent = spent.TryGetValue(t.Id, out var total) ? total : 0m,
+                }
             });
 
             return Ok(result);
@@ -706,6 +747,163 @@ namespace TheWanderLustWebAPI.Controllers
             return Ok(new { trip.TotalBudget, trip.Currency });
         }
 
+        /// <summary>
+        /// Copies a trip into a new trip owned by the caller (anyone on the trip
+        /// can do this): its stops, saved places, checklist (all unticked) and,
+        /// when a new start date is given, the itinerary moved to the new dates.
+        /// Without a start date the copy has no dates, so its itinerary is left
+        /// out. Expenses, members, polls and announcements stay with the original.
+        /// </summary>
+        [HttpPost("{id}/duplicate")]
+        public async Task<IActionResult> Duplicate(Guid id, [FromBody] DuplicateTripDto? dto)
+        {
+            var userId = await GetCurrentUserId();
+            if (userId == null)
+                return Unauthorized();
+
+            var role = await GetMemberRole(id, userId.Value);
+            if (role == null)
+                return NotFound("Trip not found.");
+
+            var source = await _dbContext.Trips
+                .Include(t => t.Destinations)
+                    .ThenInclude(d => d.Places)
+                .AsNoTracking()
+                .FirstOrDefaultAsync(t => t.Id == id);
+            if (source == null)
+                return NotFound("Trip not found.");
+
+            // How far every date moves: from the old start to the new one.
+            var newStart = ToUtc(dto?.StartDate)?.Date;
+            TimeSpan? shift = newStart != null && source.StartDate != null
+                ? newStart.Value - source.StartDate.Value.Date
+                : null;
+            DateTime? Move(DateTime? d) => d == null || shift == null ? null : DateTime.SpecifyKind(d.Value + shift.Value, DateTimeKind.Utc);
+
+            var name = string.IsNullOrWhiteSpace(dto?.Name) ? $"{source.Name} (copy)" : dto!.Name!.Trim();
+            if (name.Length > 200) name = name[..200];
+
+            var trip = new Trip
+            {
+                Id = Guid.NewGuid(),
+                UserId = userId.Value,
+                Name = name,
+                Description = source.Description,
+                StartDate = shift != null ? Move(source.StartDate) : null,
+                EndDate = shift != null ? Move(source.EndDate) : null,
+                CoverPhotoUrl = source.CoverPhotoUrl,
+                TravelersCount = source.TravelersCount,
+                PrimaryDestination = source.PrimaryDestination,
+                TotalBudget = source.TotalBudget,
+                Currency = source.Currency,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            };
+            _dbContext.Trips.Add(trip);
+            _dbContext.TripMembers.Add(new TripMember
+            {
+                Id = Guid.NewGuid(),
+                TripId = trip.Id,
+                UserId = userId.Value,
+                Role = "owner",
+                JoinedAt = DateTime.UtcNow
+            });
+
+            // Stops and their saved places, keeping old → new ids for the itinerary.
+            var stopIds = new Dictionary<Guid, Guid>();
+            var placeIds = new Dictionary<Guid, Guid>();
+            foreach (var d in source.Destinations)
+            {
+                var stop = new TripDestination
+                {
+                    Id = Guid.NewGuid(),
+                    TripId = trip.Id,
+                    GooglePlaceId = d.GooglePlaceId,
+                    Name = d.Name,
+                    Latitude = d.Latitude,
+                    Longitude = d.Longitude,
+                    PhotoUrl = d.PhotoUrl,
+                    Order = d.Order,
+                    StartDate = Move(d.StartDate),
+                    EndDate = Move(d.EndDate),
+                    CreatedAt = d.CreatedAt
+                };
+                stopIds[d.Id] = stop.Id;
+                _dbContext.TripDestinations.Add(stop);
+                foreach (var p in d.Places)
+                {
+                    var place = new TripPlace
+                    {
+                        Id = Guid.NewGuid(),
+                        TripDestinationId = stop.Id,
+                        PlaceId = p.PlaceId,
+                        PlaceName = p.PlaceName,
+                        Vicinity = p.Vicinity,
+                        Rating = p.Rating,
+                        UserRatingsTotal = p.UserRatingsTotal,
+                        PhotoUrl = p.PhotoUrl,
+                        Category = p.Category,
+                        Latitude = p.Latitude,
+                        Longitude = p.Longitude,
+                        Notes = p.Notes,
+                        CreatedAt = p.CreatedAt
+                    };
+                    placeIds[p.Id] = place.Id;
+                    _dbContext.TripPlaces.Add(place);
+                }
+            }
+            if (source.PrimaryDestinationId != null && stopIds.TryGetValue(source.PrimaryDestinationId.Value, out var primary))
+                trip.PrimaryDestinationId = primary;
+
+            if (shift != null)
+            {
+                var items = await _dbContext.ItineraryItems.AsNoTracking()
+                    .Where(i => i.TripId == id).ToListAsync();
+                foreach (var i in items)
+                {
+                    if (!stopIds.TryGetValue(i.DestinationId, out var stopId)) continue;
+                    _dbContext.ItineraryItems.Add(new ItineraryItem
+                    {
+                        Id = Guid.NewGuid(),
+                        TripId = trip.Id,
+                        DestinationId = stopId,
+                        TripPlaceId = i.TripPlaceId != null && placeIds.TryGetValue(i.TripPlaceId.Value, out var pid) ? pid : null,
+                        Title = i.Title,
+                        Category = i.Category,
+                        ScheduledDate = DateTime.SpecifyKind(i.ScheduledDate + shift.Value, DateTimeKind.Utc),
+                        StartTime = i.StartTime,
+                        EndTime = i.EndTime,
+                        Notes = i.Notes,
+                        Slot = i.Slot,
+                        SortOrder = i.SortOrder,
+                        CreatedAt = DateTime.UtcNow
+                    });
+                }
+            }
+
+            var checklist = await _dbContext.TripChecklistItems.AsNoTracking()
+                .Where(c => c.TripId == id).ToListAsync();
+            foreach (var c in checklist)
+            {
+                _dbContext.TripChecklistItems.Add(new TripChecklistItem
+                {
+                    Id = Guid.NewGuid(),
+                    TripId = trip.Id,
+                    Title = c.Title,
+                    Category = c.Category,
+                    DueDate = Move(c.DueDate),
+                    IsCompleted = false,
+                    CreatedByUserId = userId.Value,
+                    CreatedAt = DateTime.UtcNow,
+                    Order = c.Order
+                });
+            }
+
+            await _dbContext.SaveChangesAsync();
+
+            return Ok(new { trip.Id, trip.Name, trip.StartDate, trip.EndDate, trip.Status });
+        }
+
         [HttpDelete("{id}")]
         public async Task<IActionResult> Delete(Guid id)
         {
@@ -756,5 +954,12 @@ namespace TheWanderLustWebAPI.Controllers
     public class SetPrimaryDestinationDto
     {
         public Guid DestinationId { get; set; }
+    }
+
+    public class DuplicateTripDto
+    {
+        public string? Name { get; set; }
+        /// <summary>New start date; every date in the copy moves with it. Null = no dates.</summary>
+        public DateTime? StartDate { get; set; }
     }
 }

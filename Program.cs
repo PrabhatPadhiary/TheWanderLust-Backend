@@ -53,6 +53,10 @@ builder.Services.AddHttpClient<IGooglePlacesService, GooglePlacesService>();
 builder.Services.AddHttpClient(nameof(PlacePhotoService));
 builder.Services.AddSingleton<PlacePhotoService>();
 
+// Viator tours and tickets (affiliate): see ViatorService.
+builder.Services.Configure<ViatorSettings>(builder.Configuration.GetSection("Viator"));
+builder.Services.AddHttpClient<ViatorService>();
+
 builder.Services.Configure<CloudinarySettings>(
     builder.Configuration.GetSection("Cloudinary"));
 builder.Services.AddSingleton<CloudinaryService>();
@@ -128,6 +132,14 @@ builder.Services.AddRateLimiter(options =>
     PerUser(options, RateLimits.Likes, 60);
     PerUser(options, RateLimits.Safety, 20);
     PerUser(options, RateLimits.Uploads, 30);
+
+    options.AddPolicy(RateLimits.Partners, ctx =>
+        RateLimitPartition.GetFixedWindowLimiter(ClientKey(ctx), _ => new FixedWindowRateLimiterOptions
+        {
+            PermitLimit = 60,
+            Window = TimeSpan.FromMinutes(1),
+            QueueLimit = 0,
+        }));
 
     options.AddPolicy(RateLimits.Photos, ctx =>
         RateLimitPartition.GetFixedWindowLimiter(ClientKey(ctx), _ => new FixedWindowRateLimiterOptions

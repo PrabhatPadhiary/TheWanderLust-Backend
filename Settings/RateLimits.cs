@@ -9,6 +9,9 @@ namespace TheWanderLustWebAPI.Settings
         /// <summary>Place photos: 300 per minute per IP.</summary>
         public const string Photos = "photos";
 
+        /// <summary>Partner offers (Viator tours): 60 per minute per IP.</summary>
+        public const string Partners = "partners";
+
         // Per signed-in user (per IP if signed out), so one account or script
         // can't flood the community or people's notifications.
 

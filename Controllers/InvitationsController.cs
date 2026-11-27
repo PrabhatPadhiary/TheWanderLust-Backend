@@ -192,6 +192,11 @@ namespace TheWanderLustWebAPI.Controllers
             if (invitation.Trip.Members.Count >= MaxMembers)
                 return BadRequest($"This trip is full (up to {MaxMembers} people).");
 
+            // The group's size once this person joins. Counted before Add: EF
+            // puts the new member into Trip.Members as soon as it's added, so
+            // counting afterwards (+1) counted them twice.
+            var memberCount = invitation.Trip.Members.Count + 1;
+
             // Add user as a trip member with the role specified in the invitation
             var member = new TripMember
             {
@@ -210,7 +215,6 @@ namespace TheWanderLustWebAPI.Controllers
 
             // More people joined than planned: count them all (budget per person
             // divides by this).
-            var memberCount = invitation.Trip.Members.Count + 1;
             if (invitation.Trip.TravelersCount < memberCount)
                 invitation.Trip.TravelersCount = memberCount;
 

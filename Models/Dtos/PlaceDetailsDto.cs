@@ -7,6 +7,8 @@ namespace TheWanderLustWebAPI.Models.Dtos
         public string FormattedAddress { get; set; }
         public string FormattedPhoneNumber { get; set; }
         public string Website { get; set; }
+        /// <summary>Takes table reservations (Google); null when unknown.</summary>
+        public bool? Reservable { get; set; }
         public double? Rating { get; set; }
         public int? UserRatingsTotal { get; set; }
         public int? PriceLevel { get; set; }

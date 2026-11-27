@@ -415,9 +415,14 @@ namespace TheWanderLustWebAPI.Services
             if (string.IsNullOrWhiteSpace(placeName))
                 return new PagedPlacesDto { Page = page };
 
+            // A search with a category ("See all food" → search) stays in that
+            // category: a word added so Google looks for that kind of place,
+            // then only results of that kind are kept (see InScope).
+            var scope = !string.IsNullOrWhiteSpace(query) ? ScopeOf(category) : null;
+
             string text;
             if (!string.IsNullOrWhiteSpace(query))
-                text = $"{query.Trim()} in {placeName}";
+                text = $"{query.Trim()}{ScopeHint(scope, query)} in {placeName}";
             else if (!string.IsNullOrWhiteSpace(filter))
                 text = $"top {filter.Trim()} in {placeName}";
             else if (CategoryQueryMap.TryGetValue(category?.Trim() ?? "", out var template))
@@ -426,7 +431,9 @@ namespace TheWanderLustWebAPI.Services
                 throw new ArgumentException("Give a query, a filter or a category (restaurants, stays, attractions, activities).");
 
             var key = $"destinations_paged_{AreaCacheVersion}_{placeId}_{text.ToLowerInvariant()}";
-            if (_cache.TryGetValue($"{key}_p{page}", out PagedPlacesDto cachedPage))
+            // Raw Google pages are shared (same text); filtered pages are not.
+            var pageKey = scope == null ? key : $"{key}_in_{scope}";
+            if (_cache.TryGetValue($"{pageKey}_p{page}", out PagedPlacesDto cachedPage))
                 return cachedPage;
 
             var response = await FetchTextSearchPage(text, key, page, area, cancellationToken);
@@ -437,6 +444,7 @@ namespace TheWanderLustWebAPI.Services
                 // but keep smaller, newer ones the curated lists leave out.
                 Places = (response?.Results ?? new List<GoogleTextSearchResult>())
                     .Where(r => InArea(area, r))
+                    .Where(r => scope == null || InScope(scope, r.Types))
                     .Where(r => (r.Rating ?? 0) >= 3.8 && (r.UserRatingsTotal ?? 0) >= 20)
                     .OrderByDescending(PlaceScore)
                     .Select(ToPlaceDto)
@@ -444,10 +452,63 @@ namespace TheWanderLustWebAPI.Services
                 HasMore = page < MaxPages - 1 && !string.IsNullOrEmpty(response?.NextPageToken),
             };
 
-            _cache.Set($"{key}_p{page}", result, CacheDuration);
+            _cache.Set($"{pageKey}_p{page}", result, CacheDuration);
             if (!string.IsNullOrEmpty(response?.NextPageToken))
                 _cache.Set($"{key}_t{page + 1}", response.NextPageToken, PageTokenLifetime);
             return result;
+        }
+
+        // ── Searching inside one category ("See all food in Goa" → search) ──
+
+        private static readonly string[] FoodTypes = { "restaurant", "cafe", "bar", "bakery", "food", "meal_takeaway", "meal_delivery" };
+        private static readonly string[] StayTypes = { "lodging", "campground", "rv_park" };
+        private static readonly string[] ShopTypes = { "store", "clothing_store", "jewelry_store", "shoe_store", "electronics_store", "furniture_store", "home_goods_store", "supermarket", "convenience_store" };
+
+        /// <summary>"food" | "stays" | "activities" from the app's category, or null.</summary>
+        private static string? ScopeOf(string? category) => category?.Trim().ToLowerInvariant() switch
+        {
+            "restaurants" or "food" => "food",
+            "stays" => "stays",
+            "activities" or "attractions" => "activities",
+            _ => null,
+        };
+
+        /// <summary>
+        /// A word that steers Google to the kind of place ("Taj" → "Taj hotel"),
+        /// unless the search already says what it is ("cafe", "resort").
+        /// </summary>
+        private static string ScopeHint(string? scope, string query)
+        {
+            // Whole words only ("theatre" doesn't say "eat").
+            var words = System.Text.RegularExpressions.Regex.Split(query.ToLowerInvariant(), @"[^\p{L}\p{N}]+").ToHashSet();
+            bool Says(params string[] list) => list.Any(words.Contains);
+            return scope switch
+            {
+                "food" when !Says("restaurant", "restaurants", "cafe", "cafes", "café", "food", "bar", "bars", "bakery", "dhaba", "pub", "bistro", "kitchen", "brunch", "breakfast", "lunch", "dinner") => " restaurant",
+                "stays" when !Says("hotel", "hotels", "resort", "resorts", "hostel", "hostels", "stay", "stays", "villa", "villas", "inn", "lodge", "homestay", "guesthouse", "guest", "camp", "bnb", "suites") => " hotel",
+                _ => "",
+            };
+        }
+
+        /// <summary>
+        /// Whether a place is of the category, from its Google types. A place
+        /// that is lodging is always a stay (a hotel with a restaurant is not
+        /// "food"); "things to do" is anything that isn't a stay, food or a
+        /// plain shop.
+        /// </summary>
+        private static bool InScope(string scope, List<string>? types)
+        {
+            types ??= new List<string>();
+            bool Has(string[] set) => types.Any(set.Contains);
+            var stay = Has(StayTypes);
+            return scope switch
+            {
+                "stays" => stay,
+                "food" => !stay && Has(FoodTypes),
+                "activities" => !stay && !Has(FoodTypes)
+                    && !(Has(ShopTypes) && !types.Contains("shopping_mall") && !types.Contains("tourist_attraction")),
+                _ => true,
+            };
         }
 
         // Raw page `page` of a text search. Pages after the first need the
@@ -500,7 +561,9 @@ namespace TheWanderLustWebAPI.Services
             if (_cache.TryGetValue(cacheKey, out PlaceDetailsDto cachedDetails))
                 return cachedDetails;
 
-            var fields = "place_id,name,formatted_address,formatted_phone_number,website,rating,user_ratings_total,price_level,geometry,photos,reviews,opening_hours";
+            // reservable is an Atmosphere field like rating and reviews (already
+            // requested), so it adds no cost.
+            var fields = "place_id,name,formatted_address,formatted_phone_number,website,rating,user_ratings_total,price_level,geometry,photos,reviews,opening_hours,reservable";
             var url = $"{_settings.BaseUrl}/details/json?place_id={placeId}&fields={fields}&language=en&key={_settings.ApiKey}";
 
             var response = await _httpClient.GetAsync(url, cancellationToken);
@@ -582,6 +645,7 @@ namespace TheWanderLustWebAPI.Services
                 FormattedAddress = result.FormattedAddress,
                 FormattedPhoneNumber = result.FormattedPhoneNumber,
                 Website = result.Website,
+                Reservable = result.Reservable,
                 Rating = result.Rating,
                 UserRatingsTotal = result.UserRatingsTotal,
                 PriceLevel = result.PriceLevel,

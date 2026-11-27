@@ -335,6 +335,7 @@ namespace TheWanderLustWebAPI.Controllers
             }
 
             user.PhotoUrl = url;
+            user.PhotoSource = "upload"; // their choice: Google never replaces it
             await _dbContext.SaveChangesAsync();
             return Ok(new { user.PhotoUrl });
         }
@@ -347,6 +348,8 @@ namespace TheWanderLustWebAPI.Controllers
             if (user == null)
                 return Unauthorized();
 
+            // Removed on purpose: the Google photo isn't brought back at sign-in.
+            user.PhotoSource = "removed";
             if (user.PhotoUrl != null)
             {
                 user.PhotoUrl = null;
@@ -359,6 +362,10 @@ namespace TheWanderLustWebAPI.Controllers
                 {
                     _logger.LogWarning(ex, "Could not delete profile photo for user {UserId}.", user.Id);
                 }
+            }
+            else
+            {
+                await _dbContext.SaveChangesAsync(); // still remember "removed"
             }
             return Ok(new { PhotoUrl = (string?)null });
         }

@@ -36,6 +36,23 @@ public class CloudinaryService
     }
 
     /// <summary>
+    /// Copy an image from a web address into a folder (Cloudinary fetches it).
+    /// Used for Google profile photos.
+    /// </summary>
+    public async Task<string> UploadImageFromUrlAsync(string imageUrl, string folder)
+    {
+        var uploadParams = new ImageUploadParams
+        {
+            File = new FileDescription(imageUrl),
+            Folder = folder
+        };
+        var uploadResult = await _cloudinary.UploadAsync(uploadParams);
+        if (uploadResult.Error != null || uploadResult.SecureUrl == null)
+            throw new InvalidOperationException(uploadResult.Error?.Message ?? "Upload failed.");
+        return uploadResult.SecureUrl.ToString();
+    }
+
+    /// <summary>
     /// Delete one image by its Cloudinary URL
     /// (https://res.cloudinary.com/&lt;cloud&gt;/image/upload/v123/journals/&lt;id&gt;/photo.jpg).
     /// URLs that aren't Cloudinary uploads are ignored.
